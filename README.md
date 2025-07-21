@@ -83,7 +83,6 @@ func TestFnGenerateTool(t *testing.T) {
 This will generate a Go file containing the three required functions: HeyiCacheFnGetTestCacheStruct, HeyiCacheFnSizeTestCacheStruct, and HeyiCacheFnSetTestCacheStruct
 
 ### 3. Use the cache for reads/writes
-### 3. 使用cache进行读写
 ```go
 package main
 
