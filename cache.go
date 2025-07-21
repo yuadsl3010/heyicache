@@ -11,7 +11,7 @@ import (
 const (
 	segCount        int32 = 256
 	slotCount       int32 = 256
-	versionCount    int32 = 2
+	versionCount    int32 = 3
 	segmentAndOpVal       = 255
 	minSize         int32 = 32
 )
@@ -54,7 +54,7 @@ func NewCache(config Config) (*Cache, error) {
 type FuncSize func(interface{}, bool) int32
 type FuncSet func(interface{}, []byte, bool) (interface{}, int32)
 
-func (cache *Cache) Set(key []byte, value interface{}, fnSet FuncSet, fnSize FuncSize, expireSeconds int) error {
+func (cache *Cache) set(key []byte, value interface{}, fnSet FuncSet, fnSize FuncSize, expireSeconds int, canRetry bool) error {
 	hashVal := hashFunc(key)
 	segID := hashVal & segmentAndOpVal
 	valueSize := fnSize(value, true)
@@ -74,6 +74,7 @@ func (cache *Cache) Set(key []byte, value interface{}, fnSet FuncSet, fnSize Fun
 	cache.locks[segID].Unlock()
 
 	// write the key and value into the segment
+	// assume fnSet will take lots of time, so we should not hold the lock
 	segment.write(bs, key, value, fnSet)
 
 	// insert the entry into the segment
@@ -82,6 +83,10 @@ func (cache *Cache) Set(key []byte, value interface{}, fnSet FuncSet, fnSize Fun
 		// segment has been expanded, re-allocate space
 		segment.used -= 1
 		cache.locks[segID].Unlock()
+		if canRetry {
+			// give one more chance to retry
+			return cache.set(key, value, fnSet, fnSize, expireSeconds, false)
+		}
 		return ErrSegmentCleaning
 	}
 
@@ -89,6 +94,10 @@ func (cache *Cache) Set(key []byte, value interface{}, fnSet FuncSet, fnSize Fun
 	segment.used -= 1
 	cache.locks[segID].Unlock()
 	return err
+}
+
+func (cache *Cache) Set(key []byte, value interface{}, fnSet FuncSet, fnSize FuncSize, expireSeconds int) error {
+	return cache.set(key, value, fnSet, fnSize, expireSeconds, true)
 }
 
 // after Get() is called, the lease will be kept until Done() is called

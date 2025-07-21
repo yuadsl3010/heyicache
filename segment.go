@@ -18,7 +18,7 @@ var sleepLocate = 1 * time.Millisecond // ms
 type segment struct {
 	buf               *buffer
 	segId             int32
-	version           int32 // only 0 or 1
+	version           int32 // increase when segment has been evictioned, but only 0, 1, or 2
 	missCount         int64
 	hitCount          int64
 	entryCount        int64
@@ -33,8 +33,10 @@ type segment struct {
 	slotCap           int32            // max number of entry pointers a slot can hold.
 	slotsData         []entryPtr
 	used              int64
-	lastUsed          int64
-	lastBuf           *buffer
+	tmp1Used          int64
+	tmp1Buf           *buffer
+	tmp2Used          int64
+	tmp2Buf           *buffer
 }
 
 func newSegment(bufSize, segId int32, timer Timer) segment {
@@ -51,8 +53,22 @@ func (seg *segment) enough(allSize int32) bool {
 	return allSize+seg.buf.index < seg.buf.size
 }
 
+func (seg *segment) checkTmpBuf1(used int64) {
+	seg.tmp1Used -= used
+	if seg.tmp1Used == 0 {
+		seg.tmp1Buf = nil // release the buffer 1
+	}
+}
+
+func (seg *segment) checkTmpBuf2(used int64) {
+	seg.tmp2Used -= used
+	if seg.tmp2Used == 0 {
+		seg.tmp2Buf = nil // release the buffer 2
+	}
+}
+
 func (seg *segment) eviction() error {
-	if seg.lastUsed > 0 {
+	if seg.tmp2Used > 0 {
 		// it's only two cases
 		// 1. the speed of generating is too fast: expand the cache size
 		// 2. some interfaces getted from Get() but not released by Done(): check the code logic
@@ -62,14 +78,29 @@ func (seg *segment) eviction() error {
 	}
 
 	// fmt.Println("eviction done, version", seg.version, "lastUsed", seg.lastUsed, "used", seg.used)
-	seg.lastUsed = seg.used
-	seg.lastBuf = seg.buf
+	// buf1 -> buf2
+	seg.tmp2Used = seg.tmp1Used
+	seg.tmp2Buf = seg.tmp1Buf
+	// buf -> buf1
+	seg.tmp1Used = seg.used
+	seg.tmp1Buf = seg.buf
+	// get a new buf
 	seg.used = 0
 	seg.buf = NewBuffer(seg.buf.size) // allocate a new buffer
 	seg.slotsData = make([]entryPtr, len(seg.slotsData))
 	seg.slotsLen = [slotCount]int32{} // reset slots length
 	seg.entryCount = 0
-	seg.version ^= 1 // 0 -> 1 or 1 -> 0
+	switch seg.version {
+	case 0:
+		seg.version = 1
+	case 1:
+		seg.version = 2
+	case 2:
+		seg.version = 0
+	default:
+		// should never happen
+		return errors.New("invalid segment version")
+	}
 	atomic.AddInt64(&seg.totalEviction, 1)
 	return nil
 }
