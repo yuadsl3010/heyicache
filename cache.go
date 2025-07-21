@@ -62,11 +62,11 @@ func (cache *Cache) set(key []byte, value interface{}, fnSet FuncSet, fnSize Fun
 	// allocate space in segment
 	cache.locks[segID].Lock()
 	segment := &cache.segments[segID]
-	segment.used += 1 // keep current buffer not cleaned up
 	version := segment.version
+	segment.processUsed(version, 1) // keep current buffer not cleaned up
 	bs, index, err := segment.alloc(key, valueSize)
 	if err != nil {
-		segment.used -= 1
+		segment.processUsed(version, -1)
 		cache.locks[segID].Unlock()
 		return err
 	}
@@ -79,9 +79,9 @@ func (cache *Cache) set(key []byte, value interface{}, fnSet FuncSet, fnSize Fun
 
 	// insert the entry into the segment
 	cache.locks[segID].Lock()
+	segment.processUsed(version, -1)
 	if version != segment.version {
 		// segment has been expanded, re-allocate space
-		segment.used -= 1
 		cache.locks[segID].Unlock()
 		if canRetry {
 			// give one more chance to retry
@@ -91,7 +91,6 @@ func (cache *Cache) set(key []byte, value interface{}, fnSet FuncSet, fnSize Fun
 	}
 
 	segment.insert(bs, index, key, valueSize, hashVal, expireSeconds)
-	segment.used -= 1
 	cache.locks[segID].Unlock()
 	return err
 }
@@ -114,7 +113,7 @@ func (cache *Cache) get(lease *Lease, key []byte, fnGet FuncGet, peak bool) (int
 	segment := &cache.segments[segID]
 	value, err := segment.get(key, fnGet, hashVal, peak)
 	if err == nil {
-		segment.used += 1
+		segment.processUsed(segment.version, 1)
 		lease.keeps[segID][segment.version] += 1
 	}
 	cache.locks[segID].Unlock()

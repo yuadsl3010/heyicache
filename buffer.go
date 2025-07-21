@@ -11,15 +11,35 @@ var ErrOutOfRange = errors.New("out of range")
 type buffer struct {
 	index int32
 	size  int32
+	used  int64
 	data  []byte
 }
 
-func NewBuffer(size int32) *buffer {
-	return &buffer{
+func NewBuffer(size int32, alloc bool) *buffer {
+	buf := &buffer{
 		index: 0,
 		size:  size,
-		data:  make([]byte, size),
+		used:  0,
+		data:  make([]byte, 0),
 	}
+
+	if alloc {
+		buf.data = make([]byte, size)
+	}
+
+	return buf
+}
+
+func (buf *buffer) Clear() {
+	buf.index = 0
+	buf.used = 0
+	buf.data = make([]byte, 0)
+}
+
+func (buf *buffer) ReAlloc() {
+	buf.index = 0
+	buf.used = 0
+	buf.data = make([]byte, buf.size)
 }
 
 func (buf *buffer) overflow(p []byte, off int32) bool {

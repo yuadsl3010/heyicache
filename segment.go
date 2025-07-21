@@ -16,7 +16,7 @@ var sleepLocate = 1 * time.Millisecond // ms
 // it's quite different from freecache, cause we don't need to use ring buffer
 // once found a segment is full, we will allocate a new segment and release the old one
 type segment struct {
-	buf               *buffer
+	bufs              [versionCount]*buffer
 	segId             int32
 	version           int32 // increase when segment has been evictioned, but only 0, 1, or 2
 	missCount         int64
@@ -32,75 +32,64 @@ type segment struct {
 	slotsLen          [slotCount]int32 // the length for every slot
 	slotCap           int32            // max number of entry pointers a slot can hold.
 	slotsData         []entryPtr
-	used              int64
-	tmp1Used          int64
-	tmp1Buf           *buffer
-	tmp2Used          int64
-	tmp2Buf           *buffer
 }
 
 func newSegment(bufSize, segId int32, timer Timer) segment {
-	return segment{
-		buf:       NewBuffer(bufSize),
+	seg := segment{
+		bufs:      [versionCount]*buffer{},
 		segId:     segId,
 		timer:     timer,
 		slotCap:   1,
 		slotsData: make([]entryPtr, slotCount),
 	}
+
+	for i := 0; i < int(versionCount); i++ {
+		seg.bufs[i] = NewBuffer(bufSize, i == int(seg.version))
+	}
+
+	return seg
+}
+
+func (seg *segment) getBuffer() *buffer {
+	return seg.bufs[seg.version]
 }
 
 func (seg *segment) enough(allSize int32) bool {
-	return allSize+seg.buf.index < seg.buf.size
+	return allSize+seg.getBuffer().index < seg.getBuffer().size
 }
 
-func (seg *segment) checkTmpBuf1(used int64) {
-	seg.tmp1Used -= used
-	if seg.tmp1Used == 0 {
-		seg.tmp1Buf = nil // release the buffer 1
+func (seg *segment) processUsed(version int32, k int64) {
+	seg.bufs[version].used += k
+	if seg.version == version {
+		return
+	}
+	if seg.bufs[version].used == 0 {
+		seg.bufs[version].Clear()
 	}
 }
 
-func (seg *segment) checkTmpBuf2(used int64) {
-	seg.tmp2Used -= used
-	if seg.tmp2Used == 0 {
-		seg.tmp2Buf = nil // release the buffer 2
-	}
+func (seg *segment) getNextVersion() int32 {
+	return (seg.version + 1) % versionCount
 }
 
 func (seg *segment) eviction() error {
-	if seg.tmp2Used > 0 {
+	version := seg.getNextVersion()
+	if seg.bufs[version].used > 0 {
 		// it's only two cases
 		// 1. the speed of generating is too fast: expand the cache size
 		// 2. some interfaces getted from Get() but not released by Done(): check the code logic
-		// fmt.Println("eviction wait, version", seg.version, "lastUsed", seg.lastUsed, "used", seg.used)
+		// for case 1, I think 3 buffers are enough, just expand the cache size will decrease the write error ratio
+		// fmt.Println("eviction wait, segId", seg.segId, "version", seg.version, "used", seg.used, "tmp1Used", seg.tmp1Used, "tmp2Used", seg.tmp2Used)
 		atomic.AddInt64(&seg.totalEvictionWait, 1)
 		return ErrSegmentFull
 	}
 
-	// fmt.Println("eviction done, version", seg.version, "lastUsed", seg.lastUsed, "used", seg.used)
-	// buf1 -> buf2
-	seg.tmp2Used = seg.tmp1Used
-	seg.tmp2Buf = seg.tmp1Buf
-	// buf -> buf1
-	seg.tmp1Used = seg.used
-	seg.tmp1Buf = seg.buf
-	// get a new buf
-	seg.used = 0
-	seg.buf = NewBuffer(seg.buf.size) // allocate a new buffer
+	// fmt.Println("eviction done, segId", seg.segId, "version", seg.version, "used", seg.used, "tmp1Used", seg.tmp1Used, "tmp2Used", seg.tmp2Used)
+	seg.bufs[version].ReAlloc()
 	seg.slotsData = make([]entryPtr, len(seg.slotsData))
 	seg.slotsLen = [slotCount]int32{} // reset slots length
 	seg.entryCount = 0
-	switch seg.version {
-	case 0:
-		seg.version = 1
-	case 1:
-		seg.version = 2
-	case 2:
-		seg.version = 0
-	default:
-		// should never happen
-		return errors.New("invalid segment version")
-	}
+	seg.version = version
 	atomic.AddInt64(&seg.totalEviction, 1)
 	return nil
 }
@@ -128,8 +117,8 @@ func (seg *segment) alloc(key []byte, valueSize int32) ([]byte, int32, error) {
 	}
 
 	// direct alloc buffer
-	index := seg.buf.index
-	return seg.buf.Alloc(allSize), index, nil
+	index := seg.getBuffer().index
+	return seg.getBuffer().Alloc(allSize), index, nil
 }
 
 func (seg *segment) insert(bs []byte, index int32, key []byte, valueSize int32, hashVal uint64, expireSeconds int) {
@@ -183,7 +172,7 @@ func (seg *segment) get(key []byte, fnGet FuncGet, hashVal uint64, peek bool) (i
 	}
 
 	start := ptrOffset + int32(ENTRY_HDR_SIZE+hdr.keyLen)
-	bs := seg.buf.Slice(start, int32(hdr.valLen))
+	bs := seg.getBuffer().Slice(start, int32(hdr.valLen))
 	if !peek {
 		atomic.AddInt64(&seg.hitCount, 1)
 	}
@@ -217,7 +206,7 @@ func (seg *segment) locate(key []byte, hashVal uint64, peek bool) (entryHdr, int
 
 	ptr := &slot[idx]
 	var hdrBuf [ENTRY_HDR_SIZE]byte
-	seg.buf.ReadAt(hdrBuf[:], ptr.offset)
+	seg.getBuffer().ReadAt(hdrBuf[:], ptr.offset)
 	hdr := (*entryHdr)(unsafe.Pointer(&hdrBuf[0]))
 	if !peek {
 		now := seg.timer.Now()
@@ -229,7 +218,7 @@ func (seg *segment) locate(key []byte, hashVal uint64, peek bool) (entryHdr, int
 		}
 		atomic.AddInt64(&seg.totalTime, int64(now-hdr.accessTime))
 		hdr.accessTime = now
-		seg.buf.WriteAt(hdrBuf[:], ptr.offset)
+		seg.getBuffer().WriteAt(hdrBuf[:], ptr.offset)
 	}
 	return *hdr, ptr.offset, nil
 }
@@ -257,7 +246,7 @@ func (seg *segment) lookup(slot []entryPtr, hash16 uint16, key []byte) (int, boo
 		if ptr.hash16 != hash16 {
 			break
 		}
-		match = int(ptr.keyLen) == len(key) && seg.buf.EqualAt(key, ptr.offset+ENTRY_HDR_SIZE)
+		match = int(ptr.keyLen) == len(key) && seg.getBuffer().EqualAt(key, ptr.offset+ENTRY_HDR_SIZE)
 		if match {
 			return idx, match
 		}
@@ -293,10 +282,10 @@ func (seg *segment) insertEntryPtr(slotId uint8, hash16 uint16, offset int32, id
 func (seg *segment) delEntryPtr(slotId uint8, slot []entryPtr, idx int) {
 	offset := slot[idx].offset
 	var entryHdrBuf [ENTRY_HDR_SIZE]byte
-	seg.buf.ReadAt(entryHdrBuf[:], offset)
+	seg.getBuffer().ReadAt(entryHdrBuf[:], offset)
 	entryHdr := (*entryHdr)(unsafe.Pointer(&entryHdrBuf[0]))
 	entryHdr.deleted = true
-	seg.buf.WriteAt(entryHdrBuf[:], offset)
+	seg.getBuffer().WriteAt(entryHdrBuf[:], offset)
 	copy(slot[idx:], slot[idx+1:])
 	seg.slotsLen[slotId]--
 	atomic.AddInt64(&seg.entryCount, -1)

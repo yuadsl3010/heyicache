@@ -68,19 +68,7 @@ func (leaseCtx *LeaseCtx) Done() {
 				}
 
 				lease.cache.locks[segID].Lock()
-				segment := &lease.cache.segments[segID]
-				vv := segment.version - int32(version)
-				switch vv {
-				case 0: // current 0, lease 0; current 1, lease 1; current 2, lease 2
-					segment.used -= k
-				case 1, -2: // current 1, lease 0; current 2, lease 1; current 0, lease 2
-					segment.checkTmpBuf1(k)
-				case 2, -1: // current 2, lease 0; current 0, lease 1; current 1, lease 2
-					segment.checkTmpBuf2(k)
-				default:
-					// should not happen
-					fmt.Println("unexpected segment version:", segment.version, "lease version:", version)
-				}
+				lease.cache.segments[segID].processUsed(int32(version), -k)
 				lease.cache.locks[segID].Unlock()
 			}
 		}
