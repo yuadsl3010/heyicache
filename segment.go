@@ -16,25 +16,25 @@ var sleepLocate = 1 * time.Millisecond // ms
 // it's quite different from freecache, cause we don't need to use ring buffer
 // once found a segment is full, we will allocate a new segment and release the old one
 type segment struct {
-	buf           *buffer
-	segId         int32
-	version       int32 // only 0 or 1
-	missCount     int64
-	hitCount      int64
-	entryCount    int64
-	totalCount    int64            // number of entries in ring buffer, including deleted entries.
-	totalTime     int64            // used to calculate least recent used entry.
-	timer         Timer            // Timer giving current time
-	totalEvacuate int64            // used for debug
-	totalExpired  int64            // used for debug
-	overwrites    int64            // used for debug
-	touched       int64            // used for debug
-	slotsLen      [slotCount]int32 // the length for every slot
-	slotCap       int32            // max number of entry pointers a slot can hold.
-	slotsData     []entryPtr
-	used          int64
-	lastUsed      int64
-	lastBuf       *buffer
+	buf               *buffer
+	segId             int32
+	version           int32 // only 0 or 1
+	missCount         int64
+	hitCount          int64
+	entryCount        int64
+	totalCount        int64            // number of entries in ring buffer, including deleted entries.
+	totalTime         int64            // used to calculate least recent used entry.
+	timer             Timer            // Timer giving current time
+	totalEviction     int64            // used for debug
+	totalEvictionWait int64            // used for debug
+	totalExpired      int64            // used for debug
+	overwrites        int64            // used for debug
+	slotsLen          [slotCount]int32 // the length for every slot
+	slotCap           int32            // max number of entry pointers a slot can hold.
+	slotsData         []entryPtr
+	used              int64
+	lastUsed          int64
+	lastBuf           *buffer
 }
 
 func newSegment(bufSize, segId int32, timer Timer) segment {
@@ -47,10 +47,6 @@ func newSegment(bufSize, segId int32, timer Timer) segment {
 	}
 }
 
-func getAllSize(key []byte, valueSize int32) int32 {
-	return int32(len(key) + int(valueSize) + ENTRY_HDR_SIZE)
-}
-
 func (seg *segment) enough(allSize int32) bool {
 	return allSize+seg.buf.index < seg.buf.size
 }
@@ -61,6 +57,7 @@ func (seg *segment) eviction() error {
 		// 1. the speed of generating is too fast: expand the cache size
 		// 2. some interfaces getted from Get() but not released by Done(): check the code logic
 		// fmt.Println("eviction wait, version", seg.version, "lastUsed", seg.lastUsed, "used", seg.used)
+		atomic.AddInt64(&seg.totalEvictionWait, 1)
 		return ErrSegmentFull
 	}
 
@@ -73,6 +70,7 @@ func (seg *segment) eviction() error {
 	seg.slotsLen = [slotCount]int32{} // reset slots length
 	seg.entryCount = 0
 	seg.version ^= 1 // 0 -> 1 or 1 -> 0
+	atomic.AddInt64(&seg.totalEviction, 1)
 	return nil
 }
 
@@ -111,6 +109,7 @@ func (seg *segment) insert(bs []byte, index int32, key []byte, valueSize int32, 
 	idx, match := seg.lookup(slot, hash16, key)
 	if match {
 		// the exist memory can not be modified, so we need to delete it
+		atomic.AddInt64(&seg.overwrites, 1)
 		seg.delEntryPtr(slotId, slot, idx)
 	}
 
@@ -282,7 +281,8 @@ func isExpired(keyExpireAt, now uint32) bool {
 }
 
 func (seg *segment) resetStatistics() {
-	atomic.StoreInt64(&seg.totalEvacuate, 0)
+	atomic.StoreInt64(&seg.totalEviction, 0)
+	atomic.StoreInt64(&seg.totalEvictionWait, 0)
 	atomic.StoreInt64(&seg.totalExpired, 0)
 	atomic.StoreInt64(&seg.overwrites, 0)
 	atomic.StoreInt64(&seg.hitCount, 0)

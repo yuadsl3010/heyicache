@@ -50,19 +50,6 @@ func (buf *buffer) ReadAt(p []byte, off int32) (int, error) {
 	return n, err
 }
 
-func (buf *buffer) Write(p []byte) (int, error) {
-	n := 0
-	var err error
-	if buf.overflow(p, buf.index) {
-		err = ErrOutOfRange
-		return n, err
-	}
-	end := buf.index + int32(len(p))
-	buf.index = end
-	n = copy(buf.data[buf.index:end], p)
-	return n, err
-}
-
 func (buf *buffer) WriteAt(p []byte, off int32) (int, error) {
 	n := 0
 	var err error
