@@ -88,9 +88,9 @@ func (seg *segment) eviction() error {
 	seg.bufs[version].ReAlloc()
 	seg.slotsData = make([]entryPtr, len(seg.slotsData))
 	seg.slotsLen = [slotCount]int32{} // reset slots length
+	atomic.AddInt64(&seg.totalEviction, seg.entryCount)
 	seg.entryCount = 0
 	seg.version = version
-	atomic.AddInt64(&seg.totalEviction, 1)
 	return nil
 }
 
