@@ -1,6 +1,8 @@
 # HeyiCache - 一款为golang设计，零GC、无编解码、高性能的内存cache组件
 如果你和我一样，需要在golang中使用内存cache来存储百万甚至千万级别的item
+
 既不想cache过多的指针导致gc过慢，也不想切换zero gc cache迫使读写时强制做编解码转换
+
 那么，heyicache is all your need
 
 ## 为什么是HeyiCache？
@@ -12,8 +14,11 @@ heyicache参考自freecache的缓存结构设计，继承了freecache的许多�
 
 ## 性能
 单线程下，heyicache会略慢于map和gocache，但随着线程慢慢增多，heyicache的多分片优势会大幅度提升cache吞吐量
+
 而由于避免了编解码带来的性能损失，heyicache的无论是时延还是内存申请都远远小于freecache和bigcache
+
 测试的结构体是struct内部嵌套一些protobuf，相对复杂但比较贴合业务场景
+
 性能对比报告详见：https://github.com/yuadsl3010/heyicache-benchmark
 
 测试环境
@@ -135,7 +140,9 @@ func main() {
 ```
 ## 内存映射实现原理
 heyicache先从buffer中申请好指定长度[]byte，再将struct的空间内存，映射到这一段[]byte中
+
 完成Set之后，Get就相对简单了，只需要将[]byte内存取出来，然后取前StructSize的[]byte强转成Struct指针就行
+
 内存映射原理如下图所示
 ![image](https://github.com/yuadsl3010/heyicache-benchmark/blob/master/img/heyicache.svg)
 
@@ -147,17 +154,25 @@ value必须是*struct，且struct中的map成员无法被cache且会被强制指
 2. 不支持map成员：golang map所占用的内存并不连续，极其碎片化的分配方式导致无法用一段连续内存进行存储，推荐的实现方式是采用数组进行存储（如果有更好的内存管理方式，也欢迎一起探讨）
 ### 2. value是只读的
 由于struct在内存映射后，所有的指针都指向那一段分配好的连续内存，所以哪怕是修改的string，也会导致下次get的string指向已被gc回收的内存，触发panic
+
 所以value必须是只读的
+
 tips: 我自己在业务实践的时候，也会去修改其中的某个静态变量（uint64、bool这种），因为这种变量存在在连续内存中，不会被gc回收，算是一个比较hack的使用方式。但用户在修改前，一定要清楚的知道自己在修改什么，否则会引发panic
 ### 3. 极少量的写错误、少量的内存限制超出和稍高的数据过期概率
 由于内存映射的关系，heyicache的淘汰最小单位是一个segment（与freecache一样，有256个segment，例如cache总空间是256MB，那么一次淘汰就是1MB）
+
 因为无法知道这个segment上哪些数据正在被访问，所以当buffer写满的时候，只能新创建一个buffer，老buffer确认无法访问之后再回收
+
 这样的特性导致：
+
 当老buffer还未被回收的时候，无法创建新buffer，此时写入会失败（默认是3份buffer，也就极端情况下一个buffer会膨胀到预设的3倍；正常情况下，回收及时并不会超过预设值）
+
 同理，一次性回收一整个segment，必然会导致一些数据被提前淘汰，也会带来cache率的些许下降
+
 根据我自己的业务实践，相比性能的提升，cache率少许下降带来的损失可以忽略不计
 ### 4. 需要在get的数据不再访问后，主动进行lease的归还
 如果你是grpc服务，那么最好增加一个中间件，确保respone已经封包后，调用heyicache.GetLeaseCtx(ctx).Done()进行归还（见接入例子第3部分）
+
 否则heyicache无法判断buffer是否还在使用，在buffer写满的情况下就无法创建新的空间
 
 ## 使用建议
