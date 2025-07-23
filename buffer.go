@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"math/rand/v2"
 )
 
 var ErrOutOfRange = errors.New("out of range")
@@ -15,16 +16,19 @@ type buffer struct {
 	data  []byte
 }
 
-func NewBuffer(size int32, alloc bool) *buffer {
+func NewBuffer(size int32, alloc bool, shuffleRatio float32) *buffer {
 	buf := &buffer{
 		index: 0,
 		size:  size,
 		used:  0,
-		data:  make([]byte, 0),
+		data:  nil,
 	}
 
 	if alloc {
 		buf.data = make([]byte, size)
+		if shuffleRatio > 0 {
+			buf.index = int32(float32(size) * (rand.Float32() * shuffleRatio))
+		}
 	}
 
 	return buf
@@ -33,7 +37,7 @@ func NewBuffer(size int32, alloc bool) *buffer {
 func (buf *buffer) Clear() {
 	buf.index = 0
 	buf.used = 0
-	buf.data = make([]byte, 0)
+	buf.data = nil
 }
 
 func (buf *buffer) ReAlloc() {

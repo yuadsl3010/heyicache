@@ -8,6 +8,8 @@ import (
 )
 
 var ErrSegmentFull = errors.New("segment is full, please wait for automatic eviction")
+var ErrSegmentBusy = errors.New("segment is busy, please check if the beyond ratio is set too small")
+var ErrSegmentUnlucky = errors.New("segment is unlucky, please retry")
 var ErrValueTooBig = errors.New("value is too big, please use smaller value or increase cache size")
 var ErrSegmentCleaning = errors.New("segment has been expanded, re-allocate space, please retry")
 var maxLocateRetry = 3
@@ -32,19 +34,21 @@ type segment struct {
 	slotsLen          [slotCount]int32 // the length for every slot
 	slotCap           int32            // max number of entry pointers a slot can hold.
 	slotsData         []entryPtr
+	idleBuf           *int32
 }
 
-func newSegment(bufSize, segId int32, timer Timer) segment {
+func newSegment(bufSize, segId int32, idleBuf *int32, shuffleRatio float32, timer Timer) segment {
 	seg := segment{
 		bufs:      [versionCount]*buffer{},
 		segId:     segId,
 		timer:     timer,
 		slotCap:   1,
 		slotsData: make([]entryPtr, slotCount),
+		idleBuf:   idleBuf,
 	}
 
 	for i := 0; i < int(versionCount); i++ {
-		seg.bufs[i] = NewBuffer(bufSize, i == int(seg.version))
+		seg.bufs[i] = NewBuffer(bufSize, i == int(seg.version), shuffleRatio)
 	}
 
 	return seg
@@ -65,6 +69,14 @@ func (seg *segment) processUsed(version int32, k int64) {
 	}
 	if seg.bufs[version].used == 0 {
 		seg.bufs[version].Clear()
+		for {
+			// make sure success
+			idle := atomic.LoadInt32(seg.idleBuf)
+			ok := atomic.CompareAndSwapInt32(seg.idleBuf, idle, idle+1)
+			if ok {
+				break
+			}
+		}
 	}
 }
 
@@ -82,6 +94,21 @@ func (seg *segment) eviction() error {
 		// fmt.Println("eviction wait, segId", seg.segId, "version", seg.version, "used", seg.used, "tmp1Used", seg.tmp1Used, "tmp2Used", seg.tmp2Used)
 		atomic.AddInt64(&seg.totalEvictionWait, 1)
 		return ErrSegmentFull
+	}
+
+	idle := atomic.LoadInt32(seg.idleBuf)
+	if idle <= 0 {
+		// no space to allocate, return error
+		// better to expand the MaxSizeBeyondRatio
+		atomic.AddInt64(&seg.totalEvictionWait, 1)
+		return ErrSegmentBusy
+	}
+
+	ok := atomic.CompareAndSwapInt32(seg.idleBuf, idle, idle-1)
+	if !ok {
+		// someone move faster than us
+		atomic.AddInt64(&seg.totalEvictionWait, 1)
+		return ErrSegmentUnlucky
 	}
 
 	// fmt.Println("eviction done, segId", seg.segId, "version", seg.version, "used", seg.used, "tmp1Used", seg.tmp1Used, "tmp2Used", seg.tmp2Used)
