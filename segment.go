@@ -62,6 +62,7 @@ func (seg *segment) enough(allSize int32) bool {
 	return allSize+seg.getBuffer().index < seg.getBuffer().size
 }
 
+//go:inline
 func (seg *segment) processUsed(version int32, k int64) {
 	seg.bufs[version].used += k
 	if seg.version == version {
