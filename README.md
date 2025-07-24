@@ -200,4 +200,4 @@ Most use cases can integrate quickly using the provided example.
 Highly Recommended: Implement regular monitoring/reporting of HeyiCache metrics (memory usage, evictions, errors). This helps determine if memory needs adjustment or if data access patterns should be optimized.
 
 ## Questions or Suggestions?
-We welcome discussion and collaboration! Feel free to reach out
+We welcome discussion and collaboration! Feel free to reach out: yuadsl3010@gmail.com
