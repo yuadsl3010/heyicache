@@ -187,15 +187,15 @@ func (seg *segment) insert(bs []byte, index int32, key []byte, valueSize int32, 
 	seg.insertEntryPtr(slotId, hash16, index, idx, hdr.keyLen)
 }
 
-func (seg *segment) write(bs []byte, key []byte, value interface{}, fnSet FuncSet) {
+func (seg *segment) write(bs []byte, key []byte, value interface{}, fn HeyiCacheFnIfc) {
 	// cache 1. write key
 	copy(bs[ENTRY_HDR_SIZE:], key)
 
 	// cache 2. write value
-	fnSet(value, bs[ENTRY_HDR_SIZE+len(key):], true)
+	fn.Set(value, bs[ENTRY_HDR_SIZE+len(key):], true)
 }
 
-func (seg *segment) get(key []byte, fnGet FuncGet, hashVal uint64, peek bool) (interface{}, error) {
+func (seg *segment) get(key []byte, fn HeyiCacheFnIfc, hashVal uint64, peek bool) (interface{}, error) {
 	hdr, ptrOffset, err := seg.locate(key, hashVal, peek)
 	if err != nil {
 		return nil, err
@@ -207,7 +207,7 @@ func (seg *segment) get(key []byte, fnGet FuncGet, hashVal uint64, peek bool) (i
 		atomic.AddInt64(&seg.hitCount, 1)
 	}
 
-	return fnGet(bs), nil
+	return fn.Get(bs), nil
 }
 
 func (seg *segment) del(key []byte, hashVal uint64) (affected bool) {

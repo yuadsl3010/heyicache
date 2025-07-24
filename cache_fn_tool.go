@@ -119,16 +119,34 @@ func genCacheFnStructSize(ct *CodeTool, structName, fullStructName string) {
 	// size
 	ct.Println("var (")
 	ct.In()
-	ct.Println(ct.getStructSize(structName) + " = int(unsafe.Sizeof(" + fullStructName + "{}))")
+	{
+		ct.Println("// pass this ifc_ to heyicache in Get/Set")
+		ct.Println(ct.getFnIfc_(structName) + " = &" + ct.getFnIfc(structName) + "{")
+		{
+			ct.In()
+			ct.Println("StructSize: int(unsafe.Sizeof(" + fullStructName + "{})),")
+			ct.Out()
+		}
+		ct.Println("}")
+	}
 	ct.Out()
 	ct.Println(")")
+	ct.Println("")
+
+	ct.Println("type " + ct.getFnIfc(structName) + " struct {")
+	{
+		ct.In()
+		ct.Println("StructSize int")
+	}
+	ct.Out()
+	ct.Println("}")
 	ct.Println("")
 }
 
 func genCacheFnGet(ct *CodeTool, structName, fullStructName string) {
-	ct.Println("func " + ct.getFuncGet(structName) + "(bs []byte) interface{} {")
+	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") Get (bs []byte) interface{} {")
 	ct.In()
-	ct.Println("if len(bs) == 0 || len(bs) < " + ct.getStructSize(structName) + " {")
+	ct.Println("if len(bs) == 0 || len(bs) < ifc.StructSize {")
 	{
 		ct.In()
 		ct.Println("return nil")
@@ -144,7 +162,7 @@ func genCacheFnGet(ct *CodeTool, structName, fullStructName string) {
 
 func genCacheFnSize(ct *CodeTool, structName, fullStructName string, fieldTools []*FieldTool) {
 	needObj := false
-	ct.Println("func " + ct.getFuncSize(structName) + "(value interface{}, isStructPtr bool) int32 {")
+	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") Size (value interface{}, isStructPtr bool) int32 {")
 	ct.In()
 	ct.CheckPtrNil(needObj)
 	ct.CheckPtr(fullStructName, needObj)
@@ -154,7 +172,7 @@ func genCacheFnSize(ct *CodeTool, structName, fullStructName string, fieldTools 
 	{
 		ct.In()
 		// foo *Foo
-		ct.Println("size = int32(" + ct.getStructSize(structName) + ")")
+		ct.Println("size = int32(ifc.StructSize)")
 
 		ct.Out()
 	}
@@ -171,7 +189,7 @@ func genCacheFnSize(ct *CodeTool, structName, fullStructName string, fieldTools 
 
 func genCacheFnSet(ct *CodeTool, structName, fullStructName string, fieldTools []*FieldTool) {
 	needObj := true
-	ct.Println("func " + ct.getFuncSet(structName) + "(value interface{}, bs []byte, isStructPtr bool) (interface{}, int32) {")
+	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") Set (value interface{}, bs []byte, isStructPtr bool) (interface{}, int32) {")
 	ct.In()
 	ct.CheckPtrNil(needObj)
 	ct.CheckPtr(fullStructName, needObj)
@@ -182,7 +200,7 @@ func genCacheFnSet(ct *CodeTool, structName, fullStructName string, fieldTools [
 	{
 		ct.In()
 		// foo *Foo
-		ct.Println("size = int32(" + ct.getStructSize(structName) + ")")
+		ct.Println("size = int32(ifc.StructSize)")
 		ct.Println("srcBytes := (*[1 << 30]byte)(unsafe.Pointer(src))[:size:size]")
 		ct.Println("copy(bs, srcBytes)")
 		ct.Println("dst = (*" + fullStructName + ")(unsafe.Pointer(&bs[0]))")
@@ -289,6 +307,14 @@ func (ct *CodeTool) Println(str string) {
 	ct.content.WriteString(data + str + "\n")
 }
 
+func (ct *CodeTool) getFnIfc(typeName string) string {
+	return prefix + typeName + "Ifc"
+}
+
+func (ct *CodeTool) getFnIfc_(typeName string) string {
+	return ct.getFnIfc(typeName) + "_"
+}
+
 func (ct *CodeTool) getStructSize(typeName string) string {
 	return structSize + typeName
 }
@@ -388,14 +414,14 @@ func (ct *CodeTool) SetSlice(name, typeName string) {
 }
 
 func (ct *CodeTool) SetSliceCustom(name, typeName string) {
-	ct.Println("p" + name + ", size" + name + " := " + ct.getFuncSetSlice() + "(src." + name + ", bs[size:], " + ct.getStructSize(typeName) + ")")
+	ct.Println("p" + name + ", size" + name + " := " + ct.getFuncSetSlice() + "(src." + name + ", bs[size:], " + ct.getFnIfc_(typeName) + ".StructSize)")
 	ct.Println("size += size" + name)
 	ct.CheckSize()
 	ct.Println("dst." + name + " = p" + name)
 }
 
 func (ct *CodeTool) setStruct(name, typeName, item string) {
-	ct.Println("_, size" + name + " := " + ct.getFuncSet(typeName) + "(" + item + ", bs[size:], false)")
+	ct.Println("_, size" + name + " := " + ct.getFnIfc_(typeName) + ".Set(" + item + ", bs[size:], false)")
 	ct.Println("size += size" + name)
 	ct.CheckSize()
 }
@@ -413,7 +439,7 @@ func (ct *CodeTool) SetSliceStruct(name, typeName string) {
 }
 
 func (ct *CodeTool) setStructPtr(name, typeName, fullName, item, idx string) {
-	ct.Println("p" + name + ", size" + name + " := " + ct.getFuncSet(typeName) + "(" + item + ", bs[size:], true)")
+	ct.Println("p" + name + ", size" + name + " := " + ct.getFnIfc_(typeName) + ".Set(" + item + ", bs[size:], true)")
 	ct.Println("size += size" + name)
 	ct.CheckSize()
 	ct.Println("if p" + name + " != nil && size" + name + " > 0 {")
@@ -460,7 +486,8 @@ func (ct *CodeTool) SizeSlice(name, typeName string) {
 }
 
 func (ct *CodeTool) SizeSliceCustom(name, typeName string) {
-	ct.Println("size += " + ct.getFuncSizeSlice() + "(src." + name + ", " + ct.getStructSize(typeName) + ")")
+	ct.Println("size += " + ct.getFuncSizeSlice() + "(src." + name + ", " + ct.getFnIfc_(typeName) + ".StructSize)")
+
 }
 
 func (ct *CodeTool) sizeString(item string) {
@@ -480,7 +507,7 @@ func (ct *CodeTool) SizeSliceString(name string) {
 }
 
 func (ct *CodeTool) sizeStruct(typeName, item string) {
-	ct.Println("size += " + ct.getFuncSize(typeName) + "(" + item + ", false)")
+	ct.Println("size += " + ct.getFnIfc_(typeName) + ".Size(" + item + ", false)")
 }
 
 func (ct *CodeTool) SizeStruct(name, typeName string) {
@@ -496,7 +523,7 @@ func (ct *CodeTool) SizeSliceStruct(name, typeName string) {
 }
 
 func (ct *CodeTool) sizeStructPtr(typeName, item string) {
-	ct.Println("size += " + ct.getFuncSize(typeName) + "(" + item + ", true)")
+	ct.Println("size += " + ct.getFnIfc_(typeName) + ".Size(" + item + ", true)")
 }
 
 func (ct *CodeTool) SizeStructPtr(name, typeName string) {

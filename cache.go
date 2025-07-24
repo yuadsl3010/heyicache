@@ -67,13 +67,10 @@ func NewCache(config Config) (*Cache, error) {
 	return cache, nil
 }
 
-type FuncSize func(interface{}, bool) int32
-type FuncSet func(interface{}, []byte, bool) (interface{}, int32)
-
-func (cache *Cache) set(key []byte, value interface{}, fnSet FuncSet, fnSize FuncSize, expireSeconds int, canRetry bool) error {
+func (cache *Cache) set(key []byte, value interface{}, fn HeyiCacheFnIfc, expireSeconds int, canRetry bool) error {
 	hashVal := hashFunc(key)
 	segID := getSegID(hashVal)
-	valueSize := fnSize(value, true)
+	valueSize := fn.Size(value, true)
 
 	// allocate space in segment
 	cache.locks[segID].Lock()
@@ -91,7 +88,7 @@ func (cache *Cache) set(key []byte, value interface{}, fnSet FuncSet, fnSize Fun
 
 	// write the key and value into the segment
 	// assume fnSet will take lots of time, so we should not hold the lock
-	segment.write(bs, key, value, fnSet)
+	segment.write(bs, key, value, fn)
 
 	// insert the entry into the segment
 	cache.locks[segID].Lock()
@@ -101,7 +98,7 @@ func (cache *Cache) set(key []byte, value interface{}, fnSet FuncSet, fnSize Fun
 		cache.locks[segID].Unlock()
 		if canRetry {
 			// give one more chance to retry
-			return cache.set(key, value, fnSet, fnSize, expireSeconds, false)
+			return cache.set(key, value, fn, expireSeconds, false)
 		}
 		return ErrSegmentCleaning
 	}
@@ -111,14 +108,11 @@ func (cache *Cache) set(key []byte, value interface{}, fnSet FuncSet, fnSize Fun
 	return err
 }
 
-func (cache *Cache) Set(key []byte, value interface{}, fnSet FuncSet, fnSize FuncSize, expireSeconds int) error {
-	return cache.set(key, value, fnSet, fnSize, expireSeconds, true)
+func (cache *Cache) Set(key []byte, value interface{}, fn HeyiCacheFnIfc, expireSeconds int) error {
+	return cache.set(key, value, fn, expireSeconds, true)
 }
 
-// after Get() is called, the lease will be kept until Done() is called
-type FuncGet func([]byte) interface{}
-
-func (cache *Cache) get(lease *Lease, key []byte, fnGet FuncGet, peak bool) (interface{}, error) {
+func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, peak bool) (interface{}, error) {
 	if lease == nil {
 		return nil, ErrNilLeaseCtx
 	}
@@ -127,7 +121,7 @@ func (cache *Cache) get(lease *Lease, key []byte, fnGet FuncGet, peak bool) (int
 	segID := getSegID(hashVal)
 	cache.locks[segID].Lock()
 	segment := &cache.segments[segID]
-	value, err := segment.get(key, fnGet, hashVal, peak)
+	value, err := segment.get(key, fn, hashVal, peak)
 	if err == nil {
 		segment.processUsed(segment.version, 1)
 		lease.keeps[segID][segment.version] += 1
@@ -136,13 +130,13 @@ func (cache *Cache) get(lease *Lease, key []byte, fnGet FuncGet, peak bool) (int
 	return value, err
 }
 
-func (cache *Cache) Get(lease *Lease, key []byte, fnGet FuncGet) (interface{}, error) {
-	return cache.get(lease, key, fnGet, false)
+func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
+	return cache.get(lease, key, fn, false)
 }
 
 // keep peak feature following the freecache design
-func (cache *Cache) Peek(lease *Lease, key []byte, fnGet FuncGet) (interface{}, error) {
-	return cache.get(lease, key, fnGet, true)
+func (cache *Cache) Peek(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
+	return cache.get(lease, key, fn, true)
 }
 
 // Del deletes an item in the cache by key and returns true or false if a delete occurred.
