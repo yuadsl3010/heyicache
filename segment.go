@@ -23,13 +23,15 @@ type segment struct {
 	segId             int32
 	version           int32 // increase when segment has been evictioned, but only 0, 1, or 2
 	timer             Timer // Timer giving current time
-	missCount         int64
-	hitCount          int64
 	entryCount        int64
 	evictionNum       int64
 	evictionCount     int64
 	evictionWaitCount int64
 	expireCount       int64
+	missCount         int64
+	hitCount          int64 // miss + hit = read
+	writeCount        int64 // write
+	writeErrCount     int64 // write error count
 	overwriteCount    int64
 	skipWriteCount    int64 // skip write if the entry already exists in very short time
 	minWriteInterval  int32
@@ -182,11 +184,13 @@ func (seg *segment) newHdr(version int32, key []byte, valueSize int32, hashVal u
 	// allocate space in segment
 	bs, index, err := seg.alloc(key, valueSize)
 	if err != nil {
+		atomic.AddInt64(&seg.writeErrCount, 1)
 		return nil, nil, err
 	}
 
 	if version != seg.version {
 		// segment has been expanded, re-allocate space
+		atomic.AddInt64(&seg.writeErrCount, 1)
 		return nil, nil, ErrSegmentCleaning
 	}
 
@@ -211,6 +215,7 @@ func (seg *segment) newHdr(version int32, key []byte, valueSize int32, hashVal u
 
 	// insert the node
 	seg.insertEntryPtr(slotId, hash16, index, idx, hdr.keyLen)
+	atomic.AddInt64(&seg.writeCount, 1)
 	return hdr, bs, nil
 }
 
@@ -266,6 +271,9 @@ func (seg *segment) locate(key []byte, hashVal uint64, peek bool) (*entryHdr, in
 	seg.getBuffer().ReadAt(hdrBuf[:], ptr.offset)
 	hdr := (*entryHdr)(unsafe.Pointer(&hdrBuf[0]))
 	if hdr.deleted {
+		if !peek {
+			atomic.AddInt64(&seg.missCount, 1)
+		}
 		return nil, 0, ErrNotFound
 	}
 
@@ -365,8 +373,10 @@ func (seg *segment) resetStatistics() {
 	atomic.StoreInt64(&seg.evictionCount, 0)
 	atomic.StoreInt64(&seg.evictionWaitCount, 0)
 	atomic.StoreInt64(&seg.expireCount, 0)
+	atomic.StoreInt64(&seg.missCount, 0)
+	atomic.StoreInt64(&seg.hitCount, 0)
+	atomic.StoreInt64(&seg.writeCount, 0)
+	atomic.StoreInt64(&seg.writeErrCount, 0)
 	atomic.StoreInt64(&seg.overwriteCount, 0)
 	atomic.StoreInt64(&seg.skipWriteCount, 0)
-	atomic.StoreInt64(&seg.hitCount, 0)
-	atomic.StoreInt64(&seg.missCount, 0)
 }

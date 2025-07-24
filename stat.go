@@ -59,9 +59,25 @@ func (cache *Cache) MissCount() (count int64) {
 	return
 }
 
-// LookupCount is a metric that returns the number of times a lookup for a given key occurred.
-func (cache *Cache) LookupCount() int64 {
+// ReadCount is a metric that returns the number of times a lookup for a given key occurred.
+func (cache *Cache) ReadCount() int64 {
 	return cache.HitCount() + cache.MissCount()
+}
+
+// WriteCount is a metric that returns the number of times a write to the cache occurred.
+func (cache *Cache) WriteCount() (count int64) {
+	for i := range cache.segments {
+		count += atomic.LoadInt64(&cache.segments[i].writeCount)
+	}
+	return
+}
+
+// WriteErrCount is a metric that returns the number of times a write error occurred.
+func (cache *Cache) WriteErrCount() (count int64) {
+	for i := range cache.segments {
+		count += atomic.LoadInt64(&cache.segments[i].writeErrCount)
+	}
+	return
 }
 
 // HitRate is the ratio of hits over lookups.

@@ -15,7 +15,7 @@ const (
 	defaultCloseMaxSizeBeyond bool    = false
 	defaultMaxSizeBeyondRatio float32 = 0.1
 	defaultCloseBufferShuffle bool    = false
-	defaultBufferShuffleRatio float32 = 0.3
+	defaultBufferShuffleRatio float32 = 0.5
 )
 
 // cache instance, refer to freecache but do more performance optimizations based on arena memory
@@ -47,11 +47,11 @@ func NewCache(config Config) (*Cache, error) {
 		config.CustomTimer = defaultTimer{}
 	}
 
-	if !config.CloseMaxSizeBeyond {
+	if !config.CloseMaxSizeBeyond && config.MaxSizeBeyondRatio == 0 {
 		config.MaxSizeBeyondRatio = defaultMaxSizeBeyondRatio
 	}
 
-	if !config.CloseBufferShuffle {
+	if !config.CloseBufferShuffle && config.BufferShuffleRatio == 0 {
 		config.BufferShuffleRatio = defaultBufferShuffleRatio
 	}
 

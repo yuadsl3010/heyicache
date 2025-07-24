@@ -23,7 +23,7 @@ type Config struct {
 	// we don't recommend to set it to true, because it will cause all your buffers expired at the same time at beginning
 	CloseBufferShuffle bool
 
-	// default is 30% if CloseBufferShuffle is false, means the buffer will start from 0~30% ramdomly
+	// default is 50% if CloseBufferShuffle is false, means the buffer will start from 0~50% ramdomly
 	BufferShuffleRatio float32
 
 	// Minimum seconds interval to write the same key, default is 0, means no limit
