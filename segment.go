@@ -169,7 +169,7 @@ func (seg *segment) newHdr(version int32, key []byte, valueSize int32, hashVal u
 			var hdrBuf [ENTRY_HDR_SIZE]byte
 			seg.getBuffer().ReadAt(hdrBuf[:], ptr.offset)
 			hdr := (*entryHdr)(unsafe.Pointer(&hdrBuf[0]))
-			if seg.timer.Now()-hdr.accessTime > uint32(seg.minWriteInterval) {
+			if seg.timer.Now()-hdr.accessTime <= uint32(seg.minWriteInterval) {
 				atomic.AddInt64(&seg.skipWriteCount, 1)
 				return nil, nil, ErrDuplicateWrite
 			} else {
