@@ -61,7 +61,7 @@ func NewCache(config Config) (*Cache, error) {
 	}
 
 	for i := 0; i < int(segCount); i++ {
-		cache.segments[i] = newSegment(config.MaxSize*1024*1024/segCount, int32(i), &cache.idleBuf, config.BufferShuffleRatio, config.CustomTimer)
+		cache.segments[i] = newSegment(config.MaxSize*1024*1024/segCount, int32(i), &cache.idleBuf, config.BufferShuffleRatio, config.MinWriteInterval, config.CustomTimer)
 	}
 
 	return cache, nil

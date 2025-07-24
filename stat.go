@@ -3,18 +3,18 @@ package heyicache
 import "sync/atomic"
 
 // statistics
-// EvictionCount is a metric indicating the numbers an eviction occurred.
-func (cache *Cache) EvictionCount() (count int64) {
+// EvictionNum is a metric indicating the numbers an eviction occurred.
+func (cache *Cache) EvictionNum() (count int64) {
 	for i := range cache.segments {
-		count += atomic.LoadInt64(&cache.segments[i].totalEviction)
+		count += atomic.LoadInt64(&cache.segments[i].evictionNum)
 	}
 	return
 }
 
-// EvictionCall is a metric indicating the number of times an eviction was called.
-func (cache *Cache) EvictionCall() (count int64) {
+// EvictionCount is a metric indicating the number of times an eviction was called.
+func (cache *Cache) EvictionCount() (count int64) {
 	for i := range cache.segments {
-		count += atomic.LoadInt64(&cache.segments[i].totalEvictionCount)
+		count += atomic.LoadInt64(&cache.segments[i].evictionCount)
 	}
 	return
 }
@@ -22,15 +22,15 @@ func (cache *Cache) EvictionCall() (count int64) {
 // EvictionWaitCount is a metric indicating the number of times an eviction wait occurred.
 func (cache *Cache) EvictionWaitCount() (count int64) {
 	for i := range cache.segments {
-		count += atomic.LoadInt64(&cache.segments[i].totalEvictionWait)
+		count += atomic.LoadInt64(&cache.segments[i].evictionWaitCount)
 	}
 	return
 }
 
 // ExpiredCount is a metric indicating the number of times an expire occurred.
-func (cache *Cache) ExpiredCount() (count int64) {
+func (cache *Cache) ExpireCount() (count int64) {
 	for i := range cache.segments {
-		count += atomic.LoadInt64(&cache.segments[i].totalExpired)
+		count += atomic.LoadInt64(&cache.segments[i].expireCount)
 	}
 	return
 }
@@ -75,31 +75,31 @@ func (cache *Cache) HitRate() float64 {
 	}
 }
 
-// UsedStat returns the total used and size of all segments in the cache.
-func (cache *Cache) UsedStat() (int32, int32) {
-	var totalUsed int32
-	var totalSize int32
+// MemStat returns the total used and size of all segments in the cache.
+func (cache *Cache) MemStat() (int32, int32) {
+	var used int32
+	var mem int32
 	for i := range cache.segments {
 		cache.locks[i].Lock()
 		buf := cache.segments[i].getBuffer()
-		totalUsed += buf.index
-		totalSize += buf.size
+		used += buf.index
+		mem += buf.size
 		cache.locks[i].Unlock()
 	}
-	return totalUsed, totalSize
+	return used, mem
 }
 
 // OverwriteCount indicates the number of times entries have been overriden.
 func (cache *Cache) OverwriteCount() (overwriteCount int64) {
 	for i := range cache.segments {
-		overwriteCount += atomic.LoadInt64(&cache.segments[i].overwrites)
+		overwriteCount += atomic.LoadInt64(&cache.segments[i].overwriteCount)
 	}
 	return
 }
 
 func (cache *Cache) SkipWriteCount() (skipWriteCount int64) {
 	for i := range cache.segments {
-		skipWriteCount += atomic.LoadInt64(&cache.segments[i].skipwrites)
+		skipWriteCount += atomic.LoadInt64(&cache.segments[i].skipWriteCount)
 	}
 	return
 }

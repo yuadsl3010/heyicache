@@ -19,36 +19,35 @@ var sleepLocate = 1 * time.Millisecond // ms
 // it's quite different from freecache, cause we don't need to use ring buffer
 // once found a segment is full, we will allocate a new segment and release the old one
 type segment struct {
-	bufs               [versionCount]*buffer
-	segId              int32
-	version            int32 // increase when segment has been evictioned, but only 0, 1, or 2
-	missCount          int64
-	hitCount           int64
-	entryCount         int64
-	totalCount         int64            // number of entries in ring buffer, including deleted entries.
-	totalTime          int64            // used to calculate least recent used entry.
-	timer              Timer            // Timer giving current time
-	totalEviction      int64            // used for debug
-	totalEvictionCount int64            // used for debug
-	totalEvictionWait  int64            // used for debug
-	totalExpired       int64            // used for debug
-	overwrites         int64            // used for debug
-	skipwrites         int64            // used for debug, skip write if the entry already exists
-	slotsLen           [slotCount]int32 // the length for every slot
-	slotCap            int32            // max number of entry pointers a slot can hold.
-	minWriteInterval   int32
-	slotsData          []entryPtr
-	idleBuf            *int32
+	bufs              [versionCount]*buffer
+	segId             int32
+	version           int32 // increase when segment has been evictioned, but only 0, 1, or 2
+	timer             Timer // Timer giving current time
+	missCount         int64
+	hitCount          int64
+	entryCount        int64
+	evictionNum       int64
+	evictionCount     int64
+	evictionWaitCount int64
+	expireCount       int64
+	overwriteCount    int64
+	skipWriteCount    int64 // skip write if the entry already exists in very short time
+	minWriteInterval  int32
+	slotCap           int32            // max number of entry pointers a slot can hold.
+	slotsLen          [slotCount]int32 // the length for every slot
+	slotsData         []entryPtr
+	idleBuf           *int32
 }
 
-func newSegment(bufSize, segId int32, idleBuf *int32, shuffleRatio float32, timer Timer) segment {
+func newSegment(bufSize, segId int32, idleBuf *int32, shuffleRatio float32, minWriteInterval int32, timer Timer) segment {
 	seg := segment{
-		bufs:      [versionCount]*buffer{},
-		segId:     segId,
-		timer:     timer,
-		slotCap:   1,
-		slotsData: make([]entryPtr, slotCount),
-		idleBuf:   idleBuf,
+		bufs:             [versionCount]*buffer{},
+		segId:            segId,
+		timer:            timer,
+		slotCap:          1,
+		slotsData:        make([]entryPtr, slotCount),
+		idleBuf:          idleBuf,
+		minWriteInterval: minWriteInterval,
 	}
 
 	for i := 0; i < int(versionCount); i++ {
@@ -97,7 +96,7 @@ func (seg *segment) eviction() error {
 		// 2. some interfaces getted from Get() but not released by Done(): check the code logic
 		// for case 1, I think 3 buffers are enough, just expand the cache size will decrease the write error ratio
 		// fmt.Println("eviction wait, segId", seg.segId, "version", seg.version, "used", seg.used, "tmp1Used", seg.tmp1Used, "tmp2Used", seg.tmp2Used)
-		atomic.AddInt64(&seg.totalEvictionWait, 1)
+		atomic.AddInt64(&seg.evictionWaitCount, 1)
 		return ErrSegmentFull
 	}
 
@@ -105,14 +104,14 @@ func (seg *segment) eviction() error {
 	if idle <= 0 {
 		// no space to allocate, return error
 		// better to expand the MaxSizeBeyondRatio
-		atomic.AddInt64(&seg.totalEvictionWait, 1)
+		atomic.AddInt64(&seg.evictionWaitCount, 1)
 		return ErrSegmentBusy
 	}
 
 	ok := atomic.CompareAndSwapInt32(seg.idleBuf, idle, idle-1)
 	if !ok {
 		// someone move faster than us
-		atomic.AddInt64(&seg.totalEvictionWait, 1)
+		atomic.AddInt64(&seg.evictionWaitCount, 1)
 		return ErrSegmentUnlucky
 	}
 
@@ -120,8 +119,8 @@ func (seg *segment) eviction() error {
 	seg.bufs[version].ReAlloc()
 	seg.slotsData = make([]entryPtr, len(seg.slotsData))
 	seg.slotsLen = [slotCount]int32{} // reset slots length
-	atomic.AddInt64(&seg.totalEviction, seg.entryCount)
-	atomic.AddInt64(&seg.totalEvictionCount, 1)
+	atomic.AddInt64(&seg.evictionNum, seg.entryCount)
+	atomic.AddInt64(&seg.evictionCount, 1)
 	seg.entryCount = 0
 	seg.version = version
 	return nil
@@ -163,7 +162,7 @@ func (seg *segment) newHdr(version int32, key []byte, valueSize int32, hashVal u
 	if match {
 		if seg.minWriteInterval == 0 {
 			// the exist memory can not be modified, so we need to delete it
-			atomic.AddInt64(&seg.overwrites, 1)
+			atomic.AddInt64(&seg.overwriteCount, 1)
 			seg.delEntryPtr(slotId, slot, idx)
 		} else {
 			ptr := &slot[idx]
@@ -171,10 +170,10 @@ func (seg *segment) newHdr(version int32, key []byte, valueSize int32, hashVal u
 			seg.getBuffer().ReadAt(hdrBuf[:], ptr.offset)
 			hdr := (*entryHdr)(unsafe.Pointer(&hdrBuf[0]))
 			if seg.timer.Now()-hdr.accessTime > uint32(seg.minWriteInterval) {
-				atomic.AddInt64(&seg.skipwrites, 1)
+				atomic.AddInt64(&seg.skipWriteCount, 1)
 				return nil, nil, ErrDuplicateWrite
 			} else {
-				atomic.AddInt64(&seg.overwrites, 1)
+				atomic.AddInt64(&seg.overwriteCount, 1)
 				seg.delEntryPtr(slotId, slot, idx)
 			}
 		}
@@ -211,8 +210,6 @@ func (seg *segment) newHdr(version int32, key []byte, valueSize int32, hashVal u
 	hdr.deleted = true // mark as deleted first, then write the key and value
 
 	// insert the node
-	atomic.AddInt64(&seg.totalTime, int64(now))
-	atomic.AddInt64(&seg.totalCount, 1)
 	seg.insertEntryPtr(slotId, hash16, index, idx, hdr.keyLen)
 	return hdr, bs, nil
 }
@@ -276,11 +273,10 @@ func (seg *segment) locate(key []byte, hashVal uint64, peek bool) (*entryHdr, in
 		now := seg.timer.Now()
 		if isExpired(hdr.expireAt, now) {
 			seg.delEntryPtr(slotId, slot, idx)
-			atomic.AddInt64(&seg.totalExpired, 1)
+			atomic.AddInt64(&seg.expireCount, 1)
 			atomic.AddInt64(&seg.missCount, 1)
 			return nil, 0, ErrNotFound
 		}
-		atomic.AddInt64(&seg.totalTime, int64(now-hdr.accessTime))
 		hdr.accessTime = now
 		seg.getBuffer().WriteAt(hdrBuf[:], ptr.offset)
 	}
@@ -365,12 +361,12 @@ func isExpired(keyExpireAt, now uint32) bool {
 }
 
 func (seg *segment) resetStatistics() {
-	atomic.StoreInt64(&seg.totalEviction, 0)
-	atomic.StoreInt64(&seg.totalEvictionCount, 0)
-	atomic.StoreInt64(&seg.totalEvictionWait, 0)
-	atomic.StoreInt64(&seg.totalExpired, 0)
-	atomic.StoreInt64(&seg.overwrites, 0)
-	atomic.StoreInt64(&seg.skipwrites, 0)
+	atomic.StoreInt64(&seg.evictionNum, 0)
+	atomic.StoreInt64(&seg.evictionCount, 0)
+	atomic.StoreInt64(&seg.evictionWaitCount, 0)
+	atomic.StoreInt64(&seg.expireCount, 0)
+	atomic.StoreInt64(&seg.overwriteCount, 0)
+	atomic.StoreInt64(&seg.skipWriteCount, 0)
 	atomic.StoreInt64(&seg.hitCount, 0)
 	atomic.StoreInt64(&seg.missCount, 0)
 }
