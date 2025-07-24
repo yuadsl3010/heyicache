@@ -9,11 +9,14 @@ import (
 )
 
 const (
-	segCount        int32 = 256
-	slotCount       int32 = 256
-	versionCount    int32 = 3
-	segmentAndOpVal       = 255
-	minSize         int32 = 32
+	segCount                  int32   = 2048
+	slotCount                 int32   = 256
+	versionCount              int32   = 2
+	minSize                   int32   = 32
+	defaultCloseMaxSizeBeyond bool    = false
+	defaultMaxSizeBeyondRatio float32 = 0.1
+	defaultCloseBufferShuffle bool    = false
+	defaultBufferShuffleRatio float32 = 0.3
 )
 
 // cache instance, refer to freecache but do more performance optimizations based on arena memory
@@ -21,10 +24,15 @@ type Cache struct {
 	Name     string
 	locks    [segCount]sync.Mutex
 	segments [segCount]segment
+	idleBuf  int32
 }
 
 func hashFunc(data []byte) uint64 {
 	return xxhash.Sum64(data)
+}
+
+func getSegID(hashVal uint64) uint64 {
+	return hashVal % uint64(segCount)
 }
 
 func NewCache(config Config) (*Cache, error) {
@@ -40,12 +48,21 @@ func NewCache(config Config) (*Cache, error) {
 		config.CustomTimer = defaultTimer{}
 	}
 
+	if !config.CloseMaxSizeBeyond {
+		config.MaxSizeBeyondRatio = defaultMaxSizeBeyondRatio
+	}
+
+	if !config.CloseBufferShuffle {
+		config.BufferShuffleRatio = defaultBufferShuffleRatio
+	}
+
 	cache := &Cache{
-		Name: config.Name,
+		Name:    config.Name,
+		idleBuf: int32(float32(segCount) * config.MaxSizeBeyondRatio),
 	}
 
 	for i := 0; i < int(segCount); i++ {
-		cache.segments[i] = newSegment(config.MaxSize*1024*1024/segCount, int32(i), config.CustomTimer)
+		cache.segments[i] = newSegment(config.MaxSize*1024*1024/segCount, int32(i), &cache.idleBuf, config.BufferShuffleRatio, config.CustomTimer)
 	}
 
 	return cache, nil
@@ -56,7 +73,7 @@ type FuncSet func(interface{}, []byte, bool) (interface{}, int32)
 
 func (cache *Cache) set(key []byte, value interface{}, fnSet FuncSet, fnSize FuncSize, expireSeconds int, canRetry bool) error {
 	hashVal := hashFunc(key)
-	segID := hashVal & segmentAndOpVal
+	segID := getSegID(hashVal)
 	valueSize := fnSize(value, true)
 
 	// allocate space in segment
@@ -108,7 +125,7 @@ func (cache *Cache) get(lease *Lease, key []byte, fnGet FuncGet, peak bool) (int
 	}
 
 	hashVal := hashFunc(key)
-	segID := hashVal & segmentAndOpVal
+	segID := getSegID(hashVal)
 	cache.locks[segID].Lock()
 	segment := &cache.segments[segID]
 	value, err := segment.get(key, fnGet, hashVal, peak)
@@ -132,7 +149,7 @@ func (cache *Cache) Peek(lease *Lease, key []byte, fnGet FuncGet) (interface{}, 
 // Del deletes an item in the cache by key and returns true or false if a delete occurred.
 func (cache *Cache) Del(key []byte) (affected bool) {
 	hashVal := hashFunc(key)
-	segID := hashVal & segmentAndOpVal
+	segID := getSegID(hashVal)
 	cache.locks[segID].Lock()
 	affected = cache.segments[segID].del(key, hashVal)
 	cache.locks[segID].Unlock()
