@@ -72,15 +72,20 @@ func (cache *Cache) set(key []byte, value interface{}, fn HeyiCacheFnIfc, expire
 	segID := getSegID(hashVal)
 	valueSize := fn.Size(value, true)
 
-	// allocate space in segment
+	// new a hdr
 	cache.locks[segID].Lock()
 	segment := &cache.segments[segID]
 	version := segment.version
 	segment.processUsed(version, 1) // keep current buffer not cleaned up
-	bs, index, err := segment.alloc(key, valueSize)
+	hdr, bs, err := segment.newHdr(version, key, valueSize, hashVal, expireSeconds)
 	if err != nil {
 		segment.processUsed(version, -1)
 		cache.locks[segID].Unlock()
+		if err == ErrSegmentCleaning && canRetry {
+			// give one more chance to retry
+			return cache.set(key, value, fn, expireSeconds, false)
+		}
+
 		return err
 	}
 
@@ -103,7 +108,8 @@ func (cache *Cache) set(key []byte, value interface{}, fn HeyiCacheFnIfc, expire
 		return ErrSegmentCleaning
 	}
 
-	segment.insert(bs, index, key, valueSize, hashVal, expireSeconds)
+	// update header
+	hdr.deleted = false // mark as not deleted
 	cache.locks[segID].Unlock()
 	return err
 }

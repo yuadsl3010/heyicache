@@ -97,6 +97,13 @@ func (cache *Cache) OverwriteCount() (overwriteCount int64) {
 	return
 }
 
+func (cache *Cache) SkipWriteCount() (skipWriteCount int64) {
+	for i := range cache.segments {
+		skipWriteCount += atomic.LoadInt64(&cache.segments[i].skipwrites)
+	}
+	return
+}
+
 // ResetStatistics refreshes the current state of the statistics.
 func (cache *Cache) ResetStatistics() {
 	for i := range cache.segments {

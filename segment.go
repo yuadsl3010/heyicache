@@ -12,6 +12,7 @@ var ErrSegmentBusy = errors.New("segment is busy, please check if the beyond rat
 var ErrSegmentUnlucky = errors.New("segment is unlucky, please retry")
 var ErrValueTooBig = errors.New("value is too big, please use smaller value or increase cache size")
 var ErrSegmentCleaning = errors.New("segment has been expanded, re-allocate space, please retry")
+var ErrDuplicateWrite = errors.New("write interval less than MinWriteSecondsForSameKey, no need to write again")
 var maxLocateRetry = 3
 var sleepLocate = 1 * time.Millisecond // ms
 
@@ -32,8 +33,10 @@ type segment struct {
 	totalEvictionWait  int64            // used for debug
 	totalExpired       int64            // used for debug
 	overwrites         int64            // used for debug
+	skipwrites         int64            // used for debug, skip write if the entry already exists
 	slotsLen           [slotCount]int32 // the length for every slot
 	slotCap            int32            // max number of entry pointers a slot can hold.
+	minWriteInterval   int32
 	slotsData          []entryPtr
 	idleBuf            *int32
 }
@@ -151,16 +154,41 @@ func (seg *segment) alloc(key []byte, valueSize int32) ([]byte, int32, error) {
 	return seg.getBuffer().Alloc(allSize), index, nil
 }
 
-func (seg *segment) insert(bs []byte, index int32, key []byte, valueSize int32, hashVal uint64, expireSeconds int) {
+func (seg *segment) newHdr(version int32, key []byte, valueSize int32, hashVal uint64, expireSeconds int) (*entryHdr, []byte, error) {
 	// check if the key already exists
 	slotId := uint8(hashVal >> 8)
 	hash16 := uint16(hashVal >> 16)
 	slot := seg.getSlot(slotId)
 	idx, match := seg.lookup(slot, hash16, key)
 	if match {
-		// the exist memory can not be modified, so we need to delete it
-		atomic.AddInt64(&seg.overwrites, 1)
-		seg.delEntryPtr(slotId, slot, idx)
+		if seg.minWriteInterval == 0 {
+			// the exist memory can not be modified, so we need to delete it
+			atomic.AddInt64(&seg.overwrites, 1)
+			seg.delEntryPtr(slotId, slot, idx)
+		} else {
+			ptr := &slot[idx]
+			var hdrBuf [ENTRY_HDR_SIZE]byte
+			seg.getBuffer().ReadAt(hdrBuf[:], ptr.offset)
+			hdr := (*entryHdr)(unsafe.Pointer(&hdrBuf[0]))
+			if seg.timer.Now()-hdr.accessTime > uint32(seg.minWriteInterval) {
+				atomic.AddInt64(&seg.skipwrites, 1)
+				return nil, nil, ErrDuplicateWrite
+			} else {
+				atomic.AddInt64(&seg.overwrites, 1)
+				seg.delEntryPtr(slotId, slot, idx)
+			}
+		}
+	}
+
+	// allocate space in segment
+	bs, index, err := seg.alloc(key, valueSize)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if version != seg.version {
+		// segment has been expanded, re-allocate space
+		return nil, nil, ErrSegmentCleaning
 	}
 
 	// init a new entry header
@@ -180,11 +208,13 @@ func (seg *segment) insert(bs []byte, index int32, key []byte, valueSize int32, 
 	hdr.valCap = uint32(valueSize)
 	hdr.accessTime = now
 	hdr.expireAt = expireAt
+	hdr.deleted = true // mark as deleted first, then write the key and value
 
 	// insert the node
 	atomic.AddInt64(&seg.totalTime, int64(now))
 	atomic.AddInt64(&seg.totalCount, 1)
 	seg.insertEntryPtr(slotId, hash16, index, idx, hdr.keyLen)
+	return hdr, bs, nil
 }
 
 func (seg *segment) write(bs []byte, key []byte, value interface{}, fn HeyiCacheFnIfc) {
@@ -222,7 +252,7 @@ func (seg *segment) del(key []byte, hashVal uint64) (affected bool) {
 	return true
 }
 
-func (seg *segment) locate(key []byte, hashVal uint64, peek bool) (entryHdr, int32, error) {
+func (seg *segment) locate(key []byte, hashVal uint64, peek bool) (*entryHdr, int32, error) {
 	slotId := uint8(hashVal >> 8)
 	hash16 := uint16(hashVal >> 16)
 	slot := seg.getSlot(slotId)
@@ -231,26 +261,30 @@ func (seg *segment) locate(key []byte, hashVal uint64, peek bool) (entryHdr, int
 		if !peek {
 			atomic.AddInt64(&seg.missCount, 1)
 		}
-		return entryHdr{}, 0, ErrNotFound
+		return nil, 0, ErrNotFound
 	}
 
 	ptr := &slot[idx]
 	var hdrBuf [ENTRY_HDR_SIZE]byte
 	seg.getBuffer().ReadAt(hdrBuf[:], ptr.offset)
 	hdr := (*entryHdr)(unsafe.Pointer(&hdrBuf[0]))
+	if hdr.deleted {
+		return nil, 0, ErrNotFound
+	}
+
 	if !peek {
 		now := seg.timer.Now()
 		if isExpired(hdr.expireAt, now) {
 			seg.delEntryPtr(slotId, slot, idx)
 			atomic.AddInt64(&seg.totalExpired, 1)
 			atomic.AddInt64(&seg.missCount, 1)
-			return entryHdr{}, 0, ErrNotFound
+			return nil, 0, ErrNotFound
 		}
 		atomic.AddInt64(&seg.totalTime, int64(now-hdr.accessTime))
 		hdr.accessTime = now
 		seg.getBuffer().WriteAt(hdrBuf[:], ptr.offset)
 	}
-	return *hdr, ptr.offset, nil
+	return hdr, ptr.offset, nil
 }
 
 func entryPtrIdx(slot []entryPtr, hash16 uint16) int {
@@ -336,6 +370,7 @@ func (seg *segment) resetStatistics() {
 	atomic.StoreInt64(&seg.totalEvictionWait, 0)
 	atomic.StoreInt64(&seg.totalExpired, 0)
 	atomic.StoreInt64(&seg.overwrites, 0)
+	atomic.StoreInt64(&seg.skipwrites, 0)
 	atomic.StoreInt64(&seg.hitCount, 0)
 	atomic.StoreInt64(&seg.missCount, 0)
 }

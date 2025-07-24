@@ -26,6 +26,9 @@ type Config struct {
 	// default is 30% if CloseBufferShuffle is false, means the buffer will start from 0~30% ramdomly
 	BufferShuffleRatio float32
 
+	// Minimum seconds to write the same key, default is 0, means no limit
+	MinWriteSecondsForSameKey int32
+
 	// Custom timer
 	CustomTimer Timer
 }
