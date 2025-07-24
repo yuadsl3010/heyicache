@@ -18,23 +18,24 @@ var sleepLocate = 1 * time.Millisecond // ms
 // it's quite different from freecache, cause we don't need to use ring buffer
 // once found a segment is full, we will allocate a new segment and release the old one
 type segment struct {
-	bufs              [versionCount]*buffer
-	segId             int32
-	version           int32 // increase when segment has been evictioned, but only 0, 1, or 2
-	missCount         int64
-	hitCount          int64
-	entryCount        int64
-	totalCount        int64            // number of entries in ring buffer, including deleted entries.
-	totalTime         int64            // used to calculate least recent used entry.
-	timer             Timer            // Timer giving current time
-	totalEviction     int64            // used for debug
-	totalEvictionWait int64            // used for debug
-	totalExpired      int64            // used for debug
-	overwrites        int64            // used for debug
-	slotsLen          [slotCount]int32 // the length for every slot
-	slotCap           int32            // max number of entry pointers a slot can hold.
-	slotsData         []entryPtr
-	idleBuf           *int32
+	bufs               [versionCount]*buffer
+	segId              int32
+	version            int32 // increase when segment has been evictioned, but only 0, 1, or 2
+	missCount          int64
+	hitCount           int64
+	entryCount         int64
+	totalCount         int64            // number of entries in ring buffer, including deleted entries.
+	totalTime          int64            // used to calculate least recent used entry.
+	timer              Timer            // Timer giving current time
+	totalEviction      int64            // used for debug
+	totalEvictionCount int64            // used for debug
+	totalEvictionWait  int64            // used for debug
+	totalExpired       int64            // used for debug
+	overwrites         int64            // used for debug
+	slotsLen           [slotCount]int32 // the length for every slot
+	slotCap            int32            // max number of entry pointers a slot can hold.
+	slotsData          []entryPtr
+	idleBuf            *int32
 }
 
 func newSegment(bufSize, segId int32, idleBuf *int32, shuffleRatio float32, timer Timer) segment {
@@ -117,6 +118,7 @@ func (seg *segment) eviction() error {
 	seg.slotsData = make([]entryPtr, len(seg.slotsData))
 	seg.slotsLen = [slotCount]int32{} // reset slots length
 	atomic.AddInt64(&seg.totalEviction, seg.entryCount)
+	atomic.AddInt64(&seg.totalEvictionCount, 1)
 	seg.entryCount = 0
 	seg.version = version
 	return nil
@@ -330,6 +332,7 @@ func isExpired(keyExpireAt, now uint32) bool {
 
 func (seg *segment) resetStatistics() {
 	atomic.StoreInt64(&seg.totalEviction, 0)
+	atomic.StoreInt64(&seg.totalEvictionCount, 0)
 	atomic.StoreInt64(&seg.totalEvictionWait, 0)
 	atomic.StoreInt64(&seg.totalExpired, 0)
 	atomic.StoreInt64(&seg.overwrites, 0)

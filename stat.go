@@ -3,10 +3,18 @@ package heyicache
 import "sync/atomic"
 
 // statistics
-// EvictionCount is a metric indicating the number of times an eviction occurred.
+// EvictionCount is a metric indicating the numbers an eviction occurred.
 func (cache *Cache) EvictionCount() (count int64) {
 	for i := range cache.segments {
 		count += atomic.LoadInt64(&cache.segments[i].totalEviction)
+	}
+	return
+}
+
+// EvictionCall is a metric indicating the number of times an eviction was called.
+func (cache *Cache) EvictionCall() (count int64) {
+	for i := range cache.segments {
+		count += atomic.LoadInt64(&cache.segments[i].totalEvictionCount)
 	}
 	return
 }
@@ -67,21 +75,18 @@ func (cache *Cache) HitRate() float64 {
 	}
 }
 
-// UsedRate returns the percentage of used memory in the cache.
-func (cache *Cache) UsedRate() float64 {
-	var totalUsed int64
-	var totalSize int64
+// UsedStat returns the total used and size of all segments in the cache.
+func (cache *Cache) UsedStat() (int32, int32) {
+	var totalUsed int32
+	var totalSize int32
 	for i := range cache.segments {
 		cache.locks[i].Lock()
 		buf := cache.segments[i].getBuffer()
-		totalUsed += buf.used
-		totalSize += int64(buf.size)
+		totalUsed += buf.index
+		totalSize += buf.size
 		cache.locks[i].Unlock()
 	}
-	if totalSize == 0 {
-		return 0
-	}
-	return float64(totalUsed) / float64(totalSize)
+	return totalUsed, totalSize
 }
 
 // OverwriteCount indicates the number of times entries have been overriden.
