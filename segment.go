@@ -19,9 +19,11 @@ var sleepLocate = 1 * time.Millisecond // ms
 // it's quite different from freecache, cause we don't need to use ring buffer
 // once found a segment is full, we will allocate a new segment and release the old one
 type segment struct {
-	bufs              [versionCount]*buffer
+	bufs              [blockCount]*buffer
 	segId             int32
-	version           int32 // increase when segment has been evictioned, but only 0, 1, or 2
+	curBlock          int32
+	nextBlock         int32
+	_                 int32
 	timer             Timer // Timer giving current time
 	entryCount        int64
 	evictionNum       int64
@@ -38,104 +40,96 @@ type segment struct {
 	slotCap           int32            // max number of entry pointers a slot can hold.
 	slotsLen          [slotCount]int32 // the length for every slot
 	slotsData         []entryPtr
-	idleBuf           *int32
 }
 
-func newSegment(bufSize, segId int32, idleBuf *int32, shuffleRatio float32, minWriteInterval int32, timer Timer) segment {
+func newSegment(bufSize int64, segId int32, minWriteInterval int32, timer Timer) segment {
 	seg := segment{
-		bufs:             [versionCount]*buffer{},
+		bufs:             [blockCount]*buffer{},
 		segId:            segId,
 		timer:            timer,
 		slotCap:          1,
 		slotsData:        make([]entryPtr, slotCount),
-		idleBuf:          idleBuf,
 		minWriteInterval: minWriteInterval,
+		curBlock:         0,
+		nextBlock:        1,
 	}
 
-	for i := 0; i < int(versionCount); i++ {
-		seg.bufs[i] = NewBuffer(bufSize, i == int(seg.version), shuffleRatio)
+	for i := 0; i < int(blockCount); i++ {
+		seg.bufs[i] = NewBuffer(bufSize / int64(blockCount))
 	}
 
 	return seg
 }
 
-func (seg *segment) getBuffer() *buffer {
-	return seg.bufs[seg.version]
+func (seg *segment) getBuffer(ptr *entryPtr) *buffer {
+	return seg.bufs[ptr.block]
 }
 
-func (seg *segment) enough(allSize int32) bool {
-	return allSize+seg.getBuffer().index < seg.getBuffer().size
+func (seg *segment) getHdr(ptr *entryPtr) *entryHdr {
+	return (*entryHdr)(unsafe.Pointer(&seg.getBuffer(ptr).data[ptr.offset]))
+}
+
+func (seg *segment) getCurBuffer() *buffer {
+	return seg.bufs[seg.curBlock]
+}
+
+func (seg *segment) enough(allSize int64) bool {
+	return allSize+seg.getCurBuffer().index < seg.getCurBuffer().size
 }
 
 //go:inline
-func (seg *segment) processUsed(version int32, k int64) {
-	seg.bufs[version].used += k
-	if seg.version == version {
+func (seg *segment) update(block int32, k int64) {
+	seg.bufs[block].used += k
+	if seg.nextBlock != block {
 		return
 	}
-	if seg.bufs[version].used == 0 {
-		seg.bufs[version].Clear()
-		for {
-			// make sure success
-			idle := atomic.LoadInt32(seg.idleBuf)
-			ok := atomic.CompareAndSwapInt32(seg.idleBuf, idle, idle+1)
-			if ok {
-				break
-			}
-		}
-	}
-}
 
-func (seg *segment) getNextVersion() int32 {
-	return (seg.version + 1) % versionCount
+	// only clear the next block
+	buf := seg.bufs[block]
+	if buf.used == 0 {
+		// clear the buffer
+		offset := int64(0)
+		for offset+ENTRY_HDR_SIZE <= buf.index {
+			hdr := (*entryHdr)(unsafe.Pointer(&buf.data[offset]))
+			if !hdr.deleted {
+				seg.delEntryPtrByOffset(hdr.slotId, hdr.hash16, offset)
+				atomic.AddInt64(&seg.evictionNum, 1)
+			}
+
+			offset = offset + ENTRY_HDR_SIZE + int64(hdr.keyLen) + int64(hdr.valLen)
+		}
+
+		atomic.AddInt64(&seg.evictionCount, 1)
+		buf.index = 0
+		buf.data = make([]byte, buf.size)
+	}
 }
 
 func (seg *segment) eviction() error {
-	version := seg.getNextVersion()
-	if seg.bufs[version].used > 0 {
+	if seg.bufs[seg.nextBlock].used > 0 {
 		// it's only two cases
 		// 1. the speed of generating is too fast: expand the cache size
 		// 2. some interfaces getted from Get() but not released by Done(): check the code logic
 		// for case 1, I think 3 buffers are enough, just expand the cache size will decrease the write error ratio
-		// fmt.Println("eviction wait, segId", seg.segId, "version", seg.version, "used", seg.used, "tmp1Used", seg.tmp1Used, "tmp2Used", seg.tmp2Used)
 		atomic.AddInt64(&seg.evictionWaitCount, 1)
 		return ErrSegmentFull
 	}
 
-	idle := atomic.LoadInt32(seg.idleBuf)
-	if idle <= 0 {
-		// no space to allocate, return error
-		// better to expand the MaxSizeBeyondRatio
-		atomic.AddInt64(&seg.evictionWaitCount, 1)
-		return ErrSegmentBusy
-	}
-
-	ok := atomic.CompareAndSwapInt32(seg.idleBuf, idle, idle-1)
-	if !ok {
-		// someone move faster than us
-		atomic.AddInt64(&seg.evictionWaitCount, 1)
-		return ErrSegmentUnlucky
-	}
-
-	// fmt.Println("eviction done, segId", seg.segId, "version", seg.version, "used", seg.used, "tmp1Used", seg.tmp1Used, "tmp2Used", seg.tmp2Used)
-	seg.bufs[version].ReAlloc()
-	seg.slotsData = make([]entryPtr, len(seg.slotsData))
-	seg.slotsLen = [slotCount]int32{} // reset slots length
-	atomic.AddInt64(&seg.evictionNum, seg.entryCount)
-	atomic.AddInt64(&seg.evictionCount, 1)
-	seg.entryCount = 0
-	seg.version = version
+	// clean the next block
+	seg.update(seg.nextBlock, 0)
+	seg.curBlock = seg.nextBlock
+	seg.nextBlock = (seg.curBlock + 1) % blockCount
 	return nil
 }
 
-func (seg *segment) alloc(key []byte, valueSize int32) ([]byte, int32, error) {
+func (seg *segment) alloc(key []byte, valueSize int32) ([]byte, int64, error) {
 	// param check
 	if len(key) > 65535 {
 		return nil, 0, ErrLargeKey
 	}
 
 	// check buffer size
-	allSize := int32(ENTRY_HDR_SIZE+len(key)) + valueSize
+	allSize := ENTRY_HDR_SIZE + int64(len(key)) + int64(valueSize)
 	if !seg.enough(allSize) {
 		// not enough space in segment, return error.
 		// the caller should try to allocate a new segment.
@@ -151,11 +145,11 @@ func (seg *segment) alloc(key []byte, valueSize int32) ([]byte, int32, error) {
 	}
 
 	// direct alloc buffer
-	index := seg.getBuffer().index
-	return seg.getBuffer().Alloc(allSize), index, nil
+	index := seg.getCurBuffer().index
+	return seg.getCurBuffer().Alloc(allSize), index, nil
 }
 
-func (seg *segment) createHdr(version int32, key []byte, valueSize int32, hashVal uint64, expireSeconds int) (*entryHdr, []byte, error) {
+func (seg *segment) createHdr(block int32, key []byte, valueSize int32, hashVal uint64, expireSeconds int) (*entryHdr, []byte, error) {
 	// check if the key already exists
 	slotId := uint8(hashVal >> 8)
 	hash16 := uint16(hashVal >> 16)
@@ -169,9 +163,7 @@ func (seg *segment) createHdr(version int32, key []byte, valueSize int32, hashVa
 		} else {
 			// need to check if the write interval is too short
 			ptr := &slot[idx]
-			var hdrBuf [ENTRY_HDR_SIZE]byte
-			seg.getBuffer().ReadAt(hdrBuf[:], ptr.offset)
-			hdr := (*entryHdr)(unsafe.Pointer(&hdrBuf[0]))
+			hdr := seg.getHdr(ptr)
 			if seg.timer.Now()-hdr.accessTime <= uint32(seg.minWriteInterval) {
 				// the write interval is too short, skip this write
 				atomic.AddInt64(&seg.skipWriteCount, 1)
@@ -191,7 +183,7 @@ func (seg *segment) createHdr(version int32, key []byte, valueSize int32, hashVa
 		return nil, nil, err
 	}
 
-	if version != seg.version {
+	if seg.curBlock != block {
 		// segment has been expanded, re-allocate space
 		atomic.AddInt64(&seg.writeErrCount, 1)
 		return nil, nil, ErrSegmentCleaning
@@ -227,17 +219,17 @@ func (seg *segment) write(bs []byte, key []byte, value interface{}, fn HeyiCache
 	copy(bs[ENTRY_HDR_SIZE:], key)
 
 	// cache 2. write value
-	fn.Set(value, bs[ENTRY_HDR_SIZE+len(key):], true)
+	fn.Set(value, bs[ENTRY_HDR_SIZE+int64(len(key)):], true)
 }
 
 func (seg *segment) get(key []byte, fn HeyiCacheFnIfc, hashVal uint64, peek bool) (interface{}, error) {
-	hdr, ptrOffset, err := seg.locate(key, hashVal, peek)
+	hdr, ptr, err := seg.locate(key, hashVal, peek)
 	if err != nil {
 		return nil, err
 	}
 
-	start := ptrOffset + int32(ENTRY_HDR_SIZE+hdr.keyLen)
-	bs := seg.getBuffer().Slice(start, int32(hdr.valLen))
+	start := ptr.offset + ENTRY_HDR_SIZE + int64(hdr.keyLen)
+	bs := seg.getBuffer(ptr).Slice(start, int64(hdr.valLen))
 	if !peek {
 		atomic.AddInt64(&seg.hitCount, 1)
 	}
@@ -257,7 +249,7 @@ func (seg *segment) del(key []byte, hashVal uint64) (affected bool) {
 	return true
 }
 
-func (seg *segment) locate(key []byte, hashVal uint64, peek bool) (*entryHdr, int32, error) {
+func (seg *segment) locate(key []byte, hashVal uint64, peek bool) (*entryHdr, *entryPtr, error) {
 	slotId := uint8(hashVal >> 8)
 	hash16 := uint16(hashVal >> 16)
 	slot := seg.getSlot(slotId)
@@ -266,18 +258,16 @@ func (seg *segment) locate(key []byte, hashVal uint64, peek bool) (*entryHdr, in
 		if !peek {
 			atomic.AddInt64(&seg.missCount, 1)
 		}
-		return nil, 0, ErrNotFound
+		return nil, nil, ErrNotFound
 	}
 
 	ptr := &slot[idx]
-	var hdrBuf [ENTRY_HDR_SIZE]byte
-	seg.getBuffer().ReadAt(hdrBuf[:], ptr.offset)
-	hdr := (*entryHdr)(unsafe.Pointer(&hdrBuf[0]))
+	hdr := seg.getHdr(ptr)
 	if hdr.deleted {
 		if !peek {
 			atomic.AddInt64(&seg.missCount, 1)
 		}
-		return nil, 0, ErrNotFound
+		return nil, nil, ErrNotFound
 	}
 
 	if !peek {
@@ -286,12 +276,11 @@ func (seg *segment) locate(key []byte, hashVal uint64, peek bool) (*entryHdr, in
 			seg.delEntryPtr(slotId, slot, idx)
 			atomic.AddInt64(&seg.expireCount, 1)
 			atomic.AddInt64(&seg.missCount, 1)
-			return nil, 0, ErrNotFound
+			return nil, nil, ErrNotFound
 		}
 		hdr.accessTime = now
-		seg.getBuffer().WriteAt(hdrBuf[:], ptr.offset)
 	}
-	return hdr, ptr.offset, nil
+	return hdr, ptr, nil
 }
 
 func entryPtrIdx(slot []entryPtr, hash16 uint16) int {
@@ -317,7 +306,24 @@ func (seg *segment) lookup(slot []entryPtr, hash16 uint16, key []byte) (int, boo
 		if ptr.hash16 != hash16 {
 			break
 		}
-		match = int(ptr.keyLen) == len(key) && seg.getBuffer().EqualAt(key, ptr.offset+ENTRY_HDR_SIZE)
+		match = int(ptr.keyLen) == len(key) && seg.getBuffer(ptr).EqualAt(key, ptr.offset+ENTRY_HDR_SIZE)
+		if match {
+			return idx, match
+		}
+		idx++
+	}
+	return idx, match
+}
+
+func (seg *segment) lookupByOff(slot []entryPtr, hash16 uint16, offset int64) (int, bool) {
+	match := false
+	idx := entryPtrIdx(slot, hash16)
+	for idx < len(slot) {
+		ptr := &slot[idx]
+		if ptr.hash16 != hash16 {
+			break
+		}
+		match = ptr.offset == offset
 		if match {
 			return idx, match
 		}
@@ -336,7 +342,7 @@ func (seg *segment) expand() {
 	seg.slotsData = newSlotData
 }
 
-func (seg *segment) insertEntryPtr(slotId uint8, hash16 uint16, offset int32, idx int, keyLen uint16) {
+func (seg *segment) insertEntryPtr(slotId uint8, hash16 uint16, offset int64, idx int, keyLen uint16) {
 	if seg.slotsLen[slotId] == seg.slotCap {
 		seg.expand()
 	}
@@ -347,16 +353,23 @@ func (seg *segment) insertEntryPtr(slotId uint8, hash16 uint16, offset int32, id
 	slot[idx].offset = offset
 	slot[idx].hash16 = hash16
 	slot[idx].keyLen = keyLen
-	_ = seg.getSlot(slotId)
+	slot[idx].block = seg.curBlock
+	// _ = seg.getSlot(slotId)
+}
+
+func (seg *segment) delEntryPtrByOffset(slotId uint8, hash16 uint16, offset int64) {
+	slot := seg.getSlot(slotId)
+	idx, match := seg.lookupByOff(slot, hash16, offset)
+	if !match {
+		return
+	}
+	seg.delEntryPtr(slotId, slot, idx)
 }
 
 func (seg *segment) delEntryPtr(slotId uint8, slot []entryPtr, idx int) {
-	offset := slot[idx].offset
-	var entryHdrBuf [ENTRY_HDR_SIZE]byte
-	seg.getBuffer().ReadAt(entryHdrBuf[:], offset)
-	entryHdr := (*entryHdr)(unsafe.Pointer(&entryHdrBuf[0]))
-	entryHdr.deleted = true
-	seg.getBuffer().WriteAt(entryHdrBuf[:], offset)
+	ptr := &slot[idx]
+	hdr := seg.getHdr(ptr)
+	hdr.deleted = true
 	copy(slot[idx:], slot[idx+1:])
 	seg.slotsLen[slotId]--
 	atomic.AddInt64(&seg.entryCount, -1)

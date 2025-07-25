@@ -92,17 +92,16 @@ func (cache *Cache) HitRate() float64 {
 }
 
 // MemStat returns the total used and size of all segments in the cache.
-func (cache *Cache) MemStat() (int32, int32) {
-	var used int32
-	var mem int32
+func (cache *Cache) MemStat() (used int64, mem int64) {
 	for i := range cache.segments {
 		cache.locks[i].Lock()
-		buf := cache.segments[i].getBuffer()
-		used += buf.index
-		mem += buf.size
+		for _, buf := range &cache.segments[i].bufs {
+			used += buf.index
+			mem += buf.size
+		}
 		cache.locks[i].Unlock()
 	}
-	return used, mem
+	return
 }
 
 // OverwriteCount indicates the number of times entries have been overriden.

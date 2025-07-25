@@ -8,14 +8,11 @@ import (
 )
 
 const (
-	segCount                  int32   = 2048
-	slotCount                 int32   = 256
-	versionCount              int32   = 2
-	minSize                   int32   = 32
-	defaultCloseMaxSizeBeyond bool    = false
-	defaultMaxSizeBeyondRatio float32 = 0.1
-	defaultCloseBufferShuffle bool    = false
-	defaultBufferShuffleRatio float32 = 0.5
+	segCount   int32 = 256
+	slotCount  int32 = 256
+	blockCount int32 = 10 // must >= 2
+	minSize    int64 = 32
+	unitMB     int64 = 1024 * 1024
 )
 
 // cache instance, refer to freecache but do more performance optimizations based on arena memory
@@ -23,7 +20,6 @@ type Cache struct {
 	Name     string
 	locks    [segCount]sync.Mutex
 	segments [segCount]segment
-	idleBuf  int32
 }
 
 func hashFunc(data []byte) uint64 {
@@ -47,21 +43,12 @@ func NewCache(config Config) (*Cache, error) {
 		config.CustomTimer = defaultTimer{}
 	}
 
-	if !config.CloseMaxSizeBeyond && config.MaxSizeBeyondRatio == 0 {
-		config.MaxSizeBeyondRatio = defaultMaxSizeBeyondRatio
-	}
-
-	if !config.CloseBufferShuffle && config.BufferShuffleRatio == 0 {
-		config.BufferShuffleRatio = defaultBufferShuffleRatio
-	}
-
 	cache := &Cache{
-		Name:    config.Name,
-		idleBuf: int32(float32(segCount) * config.MaxSizeBeyondRatio),
+		Name: config.Name,
 	}
 
 	for i := 0; i < int(segCount); i++ {
-		cache.segments[i] = newSegment(config.MaxSize*1024*1024/segCount, int32(i), &cache.idleBuf, config.BufferShuffleRatio, config.MinWriteInterval, config.CustomTimer)
+		cache.segments[i] = newSegment(config.MaxSize*unitMB/int64(segCount), int32(i), config.MinWriteInterval, config.CustomTimer)
 	}
 
 	return cache, nil
@@ -75,11 +62,11 @@ func (cache *Cache) set(key []byte, value interface{}, fn HeyiCacheFnIfc, expire
 	// create hdr and buffer to write
 	cache.locks[segID].Lock()
 	segment := &cache.segments[segID]
-	version := segment.version
-	segment.processUsed(version, 1) // keep current buffer not cleaned up
-	hdr, bs, err := segment.createHdr(version, key, valueSize, hashVal, expireSeconds)
+	block := segment.curBlock
+	segment.update(block, 1) // keep current buffer not cleaned up
+	hdr, bs, err := segment.createHdr(block, key, valueSize, hashVal, expireSeconds)
 	if err != nil {
-		segment.processUsed(version, -1)
+		segment.update(block, -1)
 		cache.locks[segID].Unlock()
 		if err == ErrSegmentCleaning && canRetry {
 			// give one more chance to retry
@@ -96,8 +83,8 @@ func (cache *Cache) set(key []byte, value interface{}, fn HeyiCacheFnIfc, expire
 	segment.write(bs, key, value, fn)
 
 	cache.locks[segID].Lock()
-	segment.processUsed(version, -1)
-	if version != segment.version {
+	segment.update(block, -1)
+	if segment.curBlock != block {
 		// segment has been expanded, re-allocate space
 		cache.locks[segID].Unlock()
 		if canRetry {
@@ -128,8 +115,8 @@ func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, peak bool) 
 	segment := &cache.segments[segID]
 	value, err := segment.get(key, fn, hashVal, peak)
 	if err == nil {
-		segment.processUsed(segment.version, 1)
-		lease.keeps[segID][segment.version] += 1
+		segment.update(segment.curBlock, 1)
+		lease.keeps[segID][segment.curBlock] += 1
 	}
 	cache.locks[segID].Unlock()
 	return value, err
