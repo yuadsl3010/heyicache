@@ -11,7 +11,7 @@ var ErrOutOfRange = errors.New("out of range")
 type buffer struct {
 	index int64
 	size  int64
-	used  int64
+	used  int32
 	data  []byte
 }
 

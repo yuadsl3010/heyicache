@@ -78,7 +78,7 @@ func (seg *segment) enough(allSize int64) bool {
 }
 
 //go:inline
-func (seg *segment) update(block int32, k int64) {
+func (seg *segment) update(block int32, k int32) {
 	seg.bufs[block].used += k
 	if seg.nextBlock != block {
 		return
@@ -91,11 +91,8 @@ func (seg *segment) update(block int32, k int64) {
 		offset := int64(0)
 		for offset+ENTRY_HDR_SIZE <= buf.index {
 			hdr := (*entryHdr)(unsafe.Pointer(&buf.data[offset]))
-			if !hdr.deleted {
-				seg.delEntryPtrByOffset(hdr.slotId, hdr.hash16, offset)
-				atomic.AddInt64(&seg.evictionNum, 1)
-			}
-
+			seg.delEntryPtrByOffset(hdr.slotId, hdr.hash16, offset)
+			atomic.AddInt64(&seg.evictionNum, 1)
 			offset = offset + ENTRY_HDR_SIZE + int64(hdr.keyLen) + int64(hdr.valLen)
 		}
 
