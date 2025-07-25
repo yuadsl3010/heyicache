@@ -155,7 +155,7 @@ func (seg *segment) alloc(key []byte, valueSize int32) ([]byte, int32, error) {
 	return seg.getBuffer().Alloc(allSize), index, nil
 }
 
-func (seg *segment) newHdr(version int32, key []byte, valueSize int32, hashVal uint64, expireSeconds int) (*entryHdr, []byte, error) {
+func (seg *segment) createHdr(version int32, key []byte, valueSize int32, hashVal uint64, expireSeconds int) (*entryHdr, []byte, error) {
 	// check if the key already exists
 	slotId := uint8(hashVal >> 8)
 	hash16 := uint16(hashVal >> 16)
@@ -167,14 +167,17 @@ func (seg *segment) newHdr(version int32, key []byte, valueSize int32, hashVal u
 			atomic.AddInt64(&seg.overwriteCount, 1)
 			seg.delEntryPtr(slotId, slot, idx)
 		} else {
+			// need to check if the write interval is too short
 			ptr := &slot[idx]
 			var hdrBuf [ENTRY_HDR_SIZE]byte
 			seg.getBuffer().ReadAt(hdrBuf[:], ptr.offset)
 			hdr := (*entryHdr)(unsafe.Pointer(&hdrBuf[0]))
 			if seg.timer.Now()-hdr.accessTime <= uint32(seg.minWriteInterval) {
+				// the write interval is too short, skip this write
 				atomic.AddInt64(&seg.skipWriteCount, 1)
 				return nil, nil, ErrDuplicateWrite
 			} else {
+				// the write interval is long enough, we can overwrite the old entry(actually delete it and rewrite another one)
 				atomic.AddInt64(&seg.overwriteCount, 1)
 				seg.delEntryPtr(slotId, slot, idx)
 			}

@@ -72,12 +72,12 @@ func (cache *Cache) set(key []byte, value interface{}, fn HeyiCacheFnIfc, expire
 	segID := getSegID(hashVal)
 	valueSize := fn.Size(value, true)
 
-	// new a hdr
+	// create hdr and buffer to write
 	cache.locks[segID].Lock()
 	segment := &cache.segments[segID]
 	version := segment.version
 	segment.processUsed(version, 1) // keep current buffer not cleaned up
-	hdr, bs, err := segment.newHdr(version, key, valueSize, hashVal, expireSeconds)
+	hdr, bs, err := segment.createHdr(version, key, valueSize, hashVal, expireSeconds)
 	if err != nil {
 		segment.processUsed(version, -1)
 		cache.locks[segID].Unlock()
@@ -95,7 +95,6 @@ func (cache *Cache) set(key []byte, value interface{}, fn HeyiCacheFnIfc, expire
 	// assume fnSet will take lots of time, so we should not hold the lock
 	segment.write(bs, key, value, fn)
 
-	// insert the entry into the segment
 	cache.locks[segID].Lock()
 	segment.processUsed(version, -1)
 	if version != segment.version {
@@ -108,7 +107,7 @@ func (cache *Cache) set(key []byte, value interface{}, fn HeyiCacheFnIfc, expire
 		return ErrSegmentCleaning
 	}
 
-	// update header
+	// update header so it can be read later
 	hdr.deleted = false // mark as not deleted
 	cache.locks[segID].Unlock()
 	return err
