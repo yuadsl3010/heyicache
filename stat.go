@@ -43,6 +43,16 @@ func (cache *Cache) EntryCount() (entryCount int64) {
 	return
 }
 
+// GetEntryCap returns the total capacity of all segments in the cache.
+func (cache *Cache) EntryCap() (cap int64) {
+	for i := range cache.segments {
+		cache.locks[i].Lock()
+		cap += int64(len(cache.segments[i].slotsData))
+		cache.locks[i].Unlock()
+	}
+	return
+}
+
 // HitCount is a metric that returns number of times a key was found in the cache.
 func (cache *Cache) HitCount() (count int64) {
 	for i := range cache.segments {

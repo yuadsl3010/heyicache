@@ -351,7 +351,6 @@ func (seg *segment) insertEntryPtr(slotId uint8, hash16 uint16, offset int64, id
 	slot[idx].hash16 = hash16
 	slot[idx].keyLen = keyLen
 	slot[idx].block = seg.curBlock
-	// _ = seg.getSlot(slotId)
 }
 
 func (seg *segment) delEntryPtrByOffset(slotId uint8, hash16 uint16, offset int64) {
