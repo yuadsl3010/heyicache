@@ -3,16 +3,19 @@ package heyicache
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/cespare/xxhash/v2"
 )
 
 const (
-	segCount   int32 = 256
-	slotCount  int32 = 256
-	blockCount int32 = 10 // must >= 2
-	minSize    int64 = 32
-	unitMB     int64 = 1024 * 1024
+	segCount                     int32 = 256
+	segAndOpVal                        = 255
+	slotCount                    int32 = 256
+	blockCount                   int32 = 10 // must >= 2
+	minSize                      int64 = 32
+	unitMB                       int64 = 1024 * 1024
+	defaultEvictionTriggerTiming       = 0.5 // 50%
 )
 
 // cache instance, refer to freecache but do more performance optimizations based on arena memory
@@ -24,10 +27,6 @@ type Cache struct {
 
 func hashFunc(data []byte) uint64 {
 	return xxhash.Sum64(data)
-}
-
-func getSegID(hashVal uint64) uint64 {
-	return hashVal % uint64(segCount)
 }
 
 func NewCache(config Config) (*Cache, error) {
@@ -43,12 +42,20 @@ func NewCache(config Config) (*Cache, error) {
 		config.CustomTimer = defaultTimer{}
 	}
 
+	if config.EvictionTriggerTiming < 0 || config.EvictionTriggerTiming > 1 {
+		return nil, fmt.Errorf("EvictionTriggerTiming must be in (0, 1]")
+	}
+
+	if config.EvictionTriggerTiming == 0 {
+		config.EvictionTriggerTiming = defaultEvictionTriggerTiming
+	}
+
 	cache := &Cache{
 		Name: config.Name,
 	}
 
 	for i := 0; i < int(segCount); i++ {
-		cache.segments[i] = newSegment(config.MaxSize*unitMB/int64(segCount), int32(i), config.MinWriteInterval, config.CustomTimer)
+		cache.segments[i] = newSegment(config.MaxSize*unitMB/int64(segCount), int32(i), config.EvictionTriggerTiming, config.MinWriteInterval, config.CustomTimer)
 	}
 
 	return cache, nil
@@ -56,7 +63,7 @@ func NewCache(config Config) (*Cache, error) {
 
 func (cache *Cache) set(key []byte, value interface{}, fn HeyiCacheFnIfc, expireSeconds int) error {
 	hashVal := hashFunc(key)
-	segID := getSegID(hashVal)
+	segID := hashVal & segAndOpVal
 	valueSize := fn.Size(value, true)
 
 	// create hdr and buffer to write
@@ -77,14 +84,14 @@ func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, peak bool) 
 	}
 
 	hashVal := hashFunc(key)
-	segID := getSegID(hashVal)
+	segID := hashVal & segAndOpVal
 	cache.locks[segID].Lock()
 	segment := &cache.segments[segID]
 	value, err := segment.get(key, fn, hashVal, peak)
 	if err == nil {
 		// later need to return the lease to keep the used = 0
 		segment.update(segment.curBlock, 1)
-		lease.keeps[segID][segment.curBlock] += 1
+		atomic.AddInt32(&lease.keeps[segID][segment.curBlock], 1) // use atomic to avoid the lease being modified by other goroutines
 	}
 	cache.locks[segID].Unlock()
 	return value, err
@@ -102,7 +109,7 @@ func (cache *Cache) Peek(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface
 // Del deletes an item in the cache by key and returns true or false if a delete occurred.
 func (cache *Cache) Del(key []byte) (affected bool) {
 	hashVal := hashFunc(key)
-	segID := getSegID(hashVal)
+	segID := hashVal & segAndOpVal
 	cache.locks[segID].Lock()
 	affected = cache.segments[segID].del(key, hashVal)
 	cache.locks[segID].Unlock()

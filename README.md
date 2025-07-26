@@ -33,33 +33,41 @@ Test Environment:
     pkg: github.com/yuadsl3010/heyicache-benchmark
     cpu: Apple M1 Pro
 
-### 100w item, 1 goroutine: 1 write, 99 read, after 99th read do a cache result check
+### 100w item, 1 goroutine: 1 write, 99 read, after 99th read do a cache result check - 10s
 
-    BenchmarkMap-10                    72154             16882 ns/op           10937 B/op        435 allocs/op
-    BenchmarkGoCache-10                53970             22752 ns/op           10361 B/op        435 allocs/op
-    BenchmarkFreeCache-10               5823            183588 ns/op          368174 B/op       6175 allocs/op
-    BenchmarkBigCache-10                5756            214602 ns/op          410137 B/op       6276 allocs/op
-    BenchmarkHeyiCache-10              46688             26497 ns/op           19363 B/op        443 allocs/op
+    BenchmarkMap-10                   712758             22535 ns/op           10332 B/op        435 allocs/op
+    BenchmarkGoCache-10               525926             25199 ns/op           10437 B/op        435 allocs/op
+    BenchmarkFreeCache-10              66950            188858 ns/op          362027 B/op       6182 allocs/op
+    BenchmarkBigCache-10               56229            220568 ns/op          367655 B/op       6281 allocs/op
+    BenchmarkHeyiCache-10             487784             26343 ns/op           12563 B/op        443 allocs/op
 
-### 100w item, 10 goroutine: 1 write, 99 read, after 99th read do a cache result check
+    Read: success=48290616 miss=0 missRate=0.00%
+    Write: success=487784 fail=0 failRate=0.00%
+    Check: success=487784 fail=0 failRate=0.00%
 
-    BenchmarkMap-10                     7735            160470 ns/op          107603 B/op       4299 allocs/op
-    BenchmarkGoCache-10                 5965            220789 ns/op          100109 B/op       4281 allocs/op
-    BenchmarkFreeCache-10               3002            473894 ns/op         3524773 B/op      61674 allocs/op
-    BenchmarkBigCache-10                2677            424352 ns/op         3629275 B/op      62649 allocs/op
-    BenchmarkHeyiCache-10              10000            100087 ns/op          190508 B/op       4393 allocs/op
+### 100w item, 10 goroutine: 1 write, 99 read, after 99th read do a cache result check - 10s
 
-### 100w item, 100 goroutine: 1 write, 99 read, after 99th read do a cache result check
+    BenchmarkMap-10                    71468            143057 ns/op          102474 B/op       4353 allocs/op
+    BenchmarkGoCache-10                59056            199459 ns/op          101844 B/op       4352 allocs/op
+    BenchmarkFreeCache-10              28719            450582 ns/op         3586414 B/op      61814 allocs/op
+    BenchmarkBigCache-10               30032            385628 ns/op         3611240 B/op      62805 allocs/op
+    BenchmarkHeyiCache-10             155607             78537 ns/op          123514 B/op       4437 allocs/op
 
-    BenchmarkMap-10                      590           2183559 ns/op         1030850 B/op      35661 allocs/op
-    BenchmarkGoCache-10                  418           3314638 ns/op          907144 B/op      32406 allocs/op
-    BenchmarkFreeCache-10                260           4523621 ns/op        34550073 B/op     600289 allocs/op
-    BenchmarkBigCache-10                 205           4915564 ns/op        35840800 B/op     609953 allocs/op
-    BenchmarkHeyiCache-10               1360            796445 ns/op         1856661 B/op      40954 allocs/op
+    Read: success=52253444 miss=0 missRate=0.00%
+    Write: success=1532655 fail=0 failRate=0.00%
+    Check: success=1543626 fail=0 failRate=0.00%
 
-    Read: success=5243161 miss=2227 missRate=0.04% // now we get some cache miss cause the eviction strategy
-    Write: success=145197 fail=0 failRate=0.00%
-    Check: success=146236 fail=0 failRate=0.00%
+### 100w item, 100 goroutine: 1 write, 99 read, after 99th read do a cache result check - 10s
+
+    BenchmarkMap-10                     6025           2195842 ns/op         1012247 B/op      42823 allocs/op
+    BenchmarkGoCache-10                 4082           3160241 ns/op          999648 B/op      42456 allocs/op
+    BenchmarkFreeCache-10               2739           4742585 ns/op        35077612 B/op     616594 allocs/op
+    BenchmarkBigCache-10                2624           5127104 ns/op        35326953 B/op     626420 allocs/op
+    BBenchmarkHeyiCache-10             15436            799174 ns/op         1219251 B/op      44084 allocs/op
+
+    Read: success=59521064 miss=80582 missRate=0.14% // now we get some cache miss cause the eviction strategy
+    Write: success=1516698 fail=406 failRate=0.03%
+    Check: success=1528075 fail=0 failRate=0.00%
 
 ## Example Usage
 ### 1. Prepare your value struct
@@ -120,7 +128,7 @@ func main() {
 	}
 
 	// set a value
-	err = cache.Set([]byte(key), value, HeyiCacheFnSetTestCacheStruct, HeyiCacheFnSizeTestCacheStruct, 60) // 60 seconds expiration
+	err = cache.Set([]byte(key), value, HeyiCacheFnTestCacheStructIfc_, 60) // 60 seconds expiration
 	if err != nil {
 		fmt.Println("Error setting value:", err)
 		return
@@ -130,7 +138,7 @@ func main() {
 	ctx := heyicache.NewLeaseCtx(context.Background()) // init a new context with heyi cache lease
 	leaseCtx := heyicache.GetLeaseCtx(ctx)
 	leaseCache := leaseCtx.GetLease(cache)
-	data, err := cache.Get(leaseCache, []byte(key), HeyiCacheFnGetTestCacheStruct)
+	data, err := cache.Get(leaseCache, []byte(key), HeyiCacheFnTestCacheStructIfc_)
 	if err != nil {
 		fmt.Println("Error getting value:", err)
 		return
@@ -155,8 +163,67 @@ It then maps the memory space of the struct directly onto this pre-allocated []b
 After a Set operation, Get becomes simple: retrieve the []byte slice and cast the first StructSize bytes directly to a struct pointer.
 
 The memory mapping principle is illustrated below:
-![image](https://github.com/yuadsl3010/heyicache-benchmark/blob/master/img/heyicache.svg)
+![image](https://github.com/yuadsl3010/heyicache-benchmark/blob/master/img/memory-mapping.svg)
 
+## Cache Read/Write Implementation
+Heyicache initializes 256 segments. Each segment initializes:
+
+1. 10 buffers
+2. 1 entry array
+3. 1 slotLen map (length 256)
+
+### Entry Array and slotLen Overview
+(Fully reuses freecache's logic and implementation)
+
+1. The entry array length is always a multiple of 256 (number of slots) × 2.
+2. Example: With 1024-entry length:
+    1. Entries [0-3] belong to slot 0
+    2. Entries [4-7] belong to slot 1
+3. When locking slot 1 with slotLen[1] = 3, only entries [4-6] require binary search.
+
+The cache read/write principle is illustrated below:
+![image](https://github.com/yuadsl3010/heyicache-benchmark/blob/master/img/get:set.svg)
+
+## Data Eviction Implementation
+### Buffer Management (10 buffers per segment)
+1. Each buffer has equal size; their combined capacity equals one segment (1/256 of total cache size).
+2. curBlock cycles through 0-9 (buffer indices), incrementing when a buffer fills.
+3. nextBlock is (curBlock + 1) % 10.
+
+### Eviction Trigger
+When curBlock exceeds the EvictionTriggerTiming threshold (default: 50%):
+1. Eviction starts for nextBlock
+2. nextBlock becomes read-prohibited
+3. After confirming zero access dependencies, nextBlock's buffer and entries are reclaimed.
+
+### Example (Threshold=80%):
+1. At 98% cache utilization:
+    1. Eviction initiates
+    2. nextBlock reclaimed when access-free
+2. Cache utilization drops to 88%
+
+The data eviction principle is illustrated below:
+![image](https://github.com/yuadsl3010/heyicache-benchmark/blob/master/img/eviction.svg)
+
+## Lease Implementation
+### Tracking Block Access Dependencies
+1. Both cache and leases maintain a [segment count][block count]int32 array.
+2. Example:
+
+When fetching an object from segment 3, block 5:
+
+[3][5] increments in both cache and lease.
+
+### Context lifecycle end:
+
+Cache decrements lease counters
+
+If nextBlock is under eviction and reaches used=0:
+
+    Immediate reclamation occurs.
+
+The lease principle is illustrated below:
+![image](https://github.com/yuadsl3010/heyicache-benchmark/blob/master/img/lease.svg)
 
 ## Limitations
 Such significant performance! but at what cost?
@@ -176,16 +243,18 @@ Therefore, values must be treated as read-only.
 
 Tip: In practice, modifying primitive types directly embedded in the struct's memory (like uint64, bool) is possible if you understand the risks, as they reside within the contiguous block and aren't subject to GC in the problematic way. However, users must be absolutely certain of what they are modifying to avoid panics.
 
-### 3. Rare Write Errors, Moderate Memory Overhead, Slightly Higher Eviction Probability
-Due to its memory mapping design, HeyiCache's eviction unit is a whole segment (like FreeCache, it has 256 segments; e.g., a 256MB cache evicts 1MB at a time).
+### 3. Slightly Higher Eviction Probability
+Due to memory mapping, the smallest unit of eviction in heyicache is a buffer within a segment (like freecache, there are 256 segments, each containing 10 buffers. For example, if the total cache space is 256MB, then each segment is 1MB, and a single buffer – the memory evicted at once – is 100KB. In contrast, freecache evicts one using an approximate FIFO algorithm).
 
-Since it cannot track which items within a segment are actively referenced, when the buffer fills, it must allocate a new buffer. The old buffer is only recycled once confirmed inaccessible.
+Because it's impossible to know which data in the segment is being accessed, when a buffer fills up, a new buffer must be created. The old buffer is only recycled after it's confirmed no longer accessible.
 
-This leads to:
-1. Rare Write Failures: If the old buffer hasn't been recycled yet and a new buffer cannot be created (default allows up to 3 buffers, meaning memory could temporarily balloon to 3x the configured size under extreme load; normal operation usually stays within limits).
-2. Slight Cache Miss Increase: Evicting an entire segment inevitably removes some valid data prematurely, slightly reducing the cache hit rate.
+This characteristic leads to:
 
-Practical Note: In real-world usage, the significant performance gains often outweigh the minor reduction in cache hit rate.
+Higher probability of data expiration when memory is full: Compared to freecache or bigcache, the likelihood of data expiring is slightly higher.
+
+Based on my own practical experience with business applications:
+
+Negligible impact of slightly lower cache hit rate: The performance improvements far outweigh the negligible loss caused by the slightly lower cache hit rate.
 
 ### 4. Mandatory Lease Return
 You must actively return the lease (lease.Done()) once you are done using the data retrieved via GetLease.

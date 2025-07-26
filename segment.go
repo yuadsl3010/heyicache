@@ -37,12 +37,14 @@ type segment struct {
 	overwriteCount    int64
 	skipWriteCount    int64 // skip write if the entry already exists in very short time
 	minWriteInterval  int32
-	slotCap           int32            // max number of entry pointers a slot can hold.
+	slotCap           int32 // max number of entry pointers a slot can hold.
+	evictionSize      int64
 	slotsLen          [slotCount]int32 // the length for every slot
 	slotsData         []entryPtr
 }
 
-func newSegment(bufSize int64, segId int32, minWriteInterval int32, timer Timer) segment {
+func newSegment(bufSize int64, segId int32, evictionTriggerTiming float32, minWriteInterval int32, timer Timer) segment {
+	everyBufSize := bufSize / int64(blockCount)
 	seg := segment{
 		bufs:             [blockCount]*buffer{},
 		segId:            segId,
@@ -52,10 +54,11 @@ func newSegment(bufSize int64, segId int32, minWriteInterval int32, timer Timer)
 		minWriteInterval: minWriteInterval,
 		curBlock:         0,
 		nextBlock:        1,
+		evictionSize:     int64(float64(everyBufSize) * float64(evictionTriggerTiming)),
 	}
 
 	for i := 0; i < int(blockCount); i++ {
-		seg.bufs[i] = NewBuffer(bufSize / int64(blockCount))
+		seg.bufs[i] = NewBuffer(everyBufSize)
 	}
 
 	return seg
@@ -77,15 +80,19 @@ func (seg *segment) enough(allSize int64) bool {
 	return allSize+seg.getCurBuffer().index < seg.getCurBuffer().size
 }
 
+func (seg *segment) isInEviction(block int32) bool {
+	return seg.nextBlock == block && seg.getCurBuffer().index >= seg.evictionSize
+}
+
 //go:inline
 func (seg *segment) update(block int32, k int32) {
 	seg.bufs[block].used += k
-	if seg.nextBlock != block {
+	if !seg.isInEviction(block) {
 		return
 	}
 
-	// only clear the next block
-	buf := seg.bufs[block]
+	// only clear the next block when current block reach eviction size
+	buf := seg.bufs[seg.nextBlock]
 	if buf.used == 0 {
 		// clear the buffer
 		offset := int64(0)
@@ -256,6 +263,10 @@ func (seg *segment) locate(key []byte, hashVal uint64, peek bool) (*entryHdr, *e
 		if !peek {
 			atomic.AddInt64(&seg.missCount, 1)
 		}
+		return nil, nil, ErrNotFound
+	}
+
+	if seg.isInEviction(ptr.block) {
 		return nil, nil, ErrNotFound
 	}
 
