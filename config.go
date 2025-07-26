@@ -6,25 +6,20 @@ type Config struct {
 
 	// MaxSize is a limit for arena size in MB.
 	// Once it initialized, it cannot be changed.
-	MaxSize int32
+	MaxSize int64
 
-	// If close it, the cache will not allow to exceed MaxSize.
-	// default is false, means the cache can grow to MaxSize * (1 + MaxSizeBeyondRatio)
-	// we don't recommend to set it to true, because it will cause write error when segment is cleaning
-	CloseMaxSizeBeyond bool
+	// When current block buffer reach EvictionTriggerTiming percent of max size
+	// it will trigger the eviction strategy for next block buffer
+	// eg: 10 block buffers total, 1~8th blocks are full, 9th is the current block is using, 10th block is also full but the next block
+	// if EvictionTriggerTiming is 0.8, then when 9th block buffer reach 80% of max size, which means total use ratio is 98% = 80%(1~8th blocks) + 10%(10th block) + 8%(9th block reach 80% of max size)
+	// it will trigger the eviction strategy for 10th block buffer: from now on, all read operations to 10th block buffer will be stopped, and when all read operations in 10th block before has done, 10th block will be evicted, the total use ratio will be decrease to 88%
+	// but if the eviction for 10th block is slow(some read operations are still in progress), when 9th block reach full, all write operations will be stopped and return ErrSegmentFull
+	// default is 0.5, which means when use ratio reach 95%, it will trigger the eviction and decrease to 85%
+	// EvictionTriggerTiming must be in (0, 1], 0 means default 0.5
+	EvictionTriggerTiming float32
 
-	// default is 10% if CloseMaxSizeBeyond is false, means the cache can grow to MaxSize * (1 + MaxSizeBeyondRatio)
-	// eg: MaxSize = 100MB, MaxSizeBeyondRatio = 0.1 means the cache can grow to 110MB in short time to decrease write error.
-	MaxSizeBeyondRatio float32
-
-	// If close it, the cache will NOT set the buffer start from 0~50% ramdomly
-	// it will helpful if you don't want all your buffers expired at the same time
-	// default is false
-	// we don't recommend to set it to true, because it will cause all your buffers expired at the same time at beginning
-	CloseBufferShuffle bool
-
-	// default is 30% if CloseBufferShuffle is false, means the buffer will start from 0~30% ramdomly
-	BufferShuffleRatio float32
+	// Minimum seconds interval to write the same key, default is 0, means no limit
+	MinWriteInterval int32
 
 	// Custom timer
 	CustomTimer Timer
@@ -32,12 +27,9 @@ type Config struct {
 
 func DefaultConfig(name string) Config {
 	return Config{
-		Name:               name,
-		MaxSize:            minSize,
-		CustomTimer:        defaultTimer{},
-		CloseMaxSizeBeyond: defaultCloseMaxSizeBeyond,
-		MaxSizeBeyondRatio: defaultMaxSizeBeyondRatio,
-		CloseBufferShuffle: defaultCloseBufferShuffle,
-		BufferShuffleRatio: defaultBufferShuffleRatio,
+		Name:                  name,
+		MaxSize:               minSize,
+		EvictionTriggerTiming: defaultEvictionTriggerTiming,
+		CustomTimer:           defaultTimer{},
 	}
 }

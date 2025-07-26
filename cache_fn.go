@@ -4,6 +4,13 @@ import (
 	"unsafe"
 )
 
+type HeyiCacheFnIfc interface {
+	// after Get() is called, the lease will be kept until Done() is called
+	Get([]byte) interface{}
+	Size(interface{}, bool) int32
+	Set(interface{}, []byte, bool) (interface{}, int32)
+}
+
 func HeyiCacheFnSetString(src string, bs []byte) (string, int32) {
 	if len(src) == 0 {
 		return "", 0

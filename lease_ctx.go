@@ -6,18 +6,20 @@ import (
 	"sync"
 )
 
+type typeLease [segCount][blockCount]int32
+
 var (
 	ErrNilLeaseCtx = fmt.Errorf("lease context is nil")
 	leaseCtxKey    = "arena_cache_lease"
 	keepsPool      = newKeepsPool()
-	keepsNew       = [segCount][versionCount]int64{}
+	keepsNew       = typeLease{}
 )
 
 // 对象池用于复用 keeps 数组，减少内存分配
 func newKeepsPool() *sync.Pool {
 	return &sync.Pool{
 		New: func() interface{} {
-			return new([segCount][versionCount]int64)
+			return new(typeLease)
 		},
 	}
 }
@@ -27,7 +29,7 @@ type LeaseCtx struct {
 }
 
 type Lease struct {
-	keeps *[segCount][versionCount]int64
+	keeps *typeLease
 	cache *Cache
 }
 
@@ -57,7 +59,7 @@ func (leaseCtx *LeaseCtx) GetLease(cache *Cache) *Lease {
 	if _, ok := leaseCtx.leases[cache.Name]; !ok {
 		leaseCtx.leases[cache.Name] = &Lease{
 			cache: cache,
-			keeps: keepsPool.Get().(*[segCount][versionCount]int64),
+			keeps: keepsPool.Get().(*typeLease),
 		}
 	}
 	return leaseCtx.leases[cache.Name]
@@ -73,12 +75,12 @@ func (leaseCtx *LeaseCtx) Done() {
 			continue
 		}
 		for segID, vs := range *(lease.keeps) {
-			for version, k := range vs {
+			for block, k := range vs {
 				if k <= 0 {
 					continue
 				}
 				lease.cache.locks[segID].Lock()
-				lease.cache.segments[segID].processUsed(int32(version), -k)
+				lease.cache.segments[segID].update(int32(block), -k)
 				lease.cache.locks[segID].Unlock()
 			}
 		}

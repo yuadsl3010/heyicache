@@ -29,33 +29,41 @@ heyicache参考自freecache的缓存结构设计，继承了freecache的许多�
     pkg: github.com/yuadsl3010/heyicache-benchmark
     cpu: Apple M1 Pro
 
-### 100w item, 1 goroutine: 1 write, 99 read, after 99th read do a cache result check
+### 100w item, 1 goroutine: 1 write, 99 read, after 99th read do a cache result check - 10s
 
-    BenchmarkMap-10                    72154             16882 ns/op           10937 B/op        435 allocs/op
-    BenchmarkGoCache-10                53970             22752 ns/op           10361 B/op        435 allocs/op
-    BenchmarkFreeCache-10               5823            183588 ns/op          368174 B/op       6175 allocs/op
-    BenchmarkBigCache-10                5756            214602 ns/op          410137 B/op       6276 allocs/op
-    BenchmarkHeyiCache-10              46688             26497 ns/op           19363 B/op        443 allocs/op
+    BenchmarkMap-10                   712758             22535 ns/op           10332 B/op        435 allocs/op
+    BenchmarkGoCache-10               525926             25199 ns/op           10437 B/op        435 allocs/op
+    BenchmarkFreeCache-10              66950            188858 ns/op          362027 B/op       6182 allocs/op
+    BenchmarkBigCache-10               56229            220568 ns/op          367655 B/op       6281 allocs/op
+    BenchmarkHeyiCache-10             487784             26343 ns/op           12563 B/op        443 allocs/op
 
-### 100w item, 10 goroutine: 1 write, 99 read, after 99th read do a cache result check
+    Read: success=48290616 miss=0 missRate=0.00%
+    Write: success=487784 fail=0 failRate=0.00%
+    Check: success=487784 fail=0 failRate=0.00%
 
-    BenchmarkMap-10                     7735            160470 ns/op          107603 B/op       4299 allocs/op
-    BenchmarkGoCache-10                 5965            220789 ns/op          100109 B/op       4281 allocs/op
-    BenchmarkFreeCache-10               3002            473894 ns/op         3524773 B/op      61674 allocs/op
-    BenchmarkBigCache-10                2677            424352 ns/op         3629275 B/op      62649 allocs/op
-    BenchmarkHeyiCache-10              10000            100087 ns/op          190508 B/op       4393 allocs/op
+### 100w item, 10 goroutine: 1 write, 99 read, after 99th read do a cache result check - 10s
 
-### 100w item, 100 goroutine: 1 write, 99 read, after 99th read do a cache result check
+    BenchmarkMap-10                    71468            143057 ns/op          102474 B/op       4353 allocs/op
+    BenchmarkGoCache-10                59056            199459 ns/op          101844 B/op       4352 allocs/op
+    BenchmarkFreeCache-10              28719            450582 ns/op         3586414 B/op      61814 allocs/op
+    BenchmarkBigCache-10               30032            385628 ns/op         3611240 B/op      62805 allocs/op
+    BenchmarkHeyiCache-10             155607             78537 ns/op          123514 B/op       4437 allocs/op
 
-    BenchmarkMap-10                      590           2183559 ns/op         1030850 B/op      35661 allocs/op
-    BenchmarkGoCache-10                  418           3314638 ns/op          907144 B/op      32406 allocs/op
-    BenchmarkFreeCache-10                260           4523621 ns/op        34550073 B/op     600289 allocs/op
-    BenchmarkBigCache-10                 205           4915564 ns/op        35840800 B/op     609953 allocs/op
-    BenchmarkHeyiCache-10               1360            796445 ns/op         1856661 B/op      40954 allocs/op
+    Read: success=52253444 miss=0 missRate=0.00%
+    Write: success=1532655 fail=0 failRate=0.00%
+    Check: success=1543626 fail=0 failRate=0.00%
 
-    Read: success=5243161 miss=2227 missRate=0.04% // now we get some cache miss cause the eviction strategy
-    Write: success=145197 fail=0 failRate=0.00%
-    Check: success=146236 fail=0 failRate=0.00%
+### 100w item, 100 goroutine: 1 write, 99 read, after 99th read do a cache result check - 10s
+
+    BenchmarkMap-10                     6025           2195842 ns/op         1012247 B/op      42823 allocs/op
+    BenchmarkGoCache-10                 4082           3160241 ns/op          999648 B/op      42456 allocs/op
+    BenchmarkFreeCache-10               2739           4742585 ns/op        35077612 B/op     616594 allocs/op
+    BenchmarkBigCache-10                2624           5127104 ns/op        35326953 B/op     626420 allocs/op
+    BBenchmarkHeyiCache-10             15436            799174 ns/op         1219251 B/op      44084 allocs/op
+
+    Read: success=59521064 miss=80582 missRate=0.14% // now we get some cache miss cause the eviction strategy
+    Write: success=1516698 fail=406 failRate=0.03%
+    Check: success=1528075 fail=0 failRate=0.00%
 
 ## 接入例子
 ### 1. 准备好value结构体
@@ -81,7 +89,7 @@ func TestFnGenerateTool(t *testing.T) {
 	heyicache.GenCacheFn(TestCacheStruct{}, true)
 }
 ```
-执行后将得到一个go文件，里面包含HeyiCacheFnGetTestCacheStruct、HeyiCacheFnSizeTestCacheStruct和HeyiCacheFnSetTestCacheStruct三个函数
+执行后将得到一个go文件，里面包含HeyiCacheFnTestCacheStructIfc_实例
 
 ### 3. 使用cache进行读写
 ```go
@@ -113,7 +121,7 @@ func main() {
 	}
 
 	// set a value
-	err = cache.Set([]byte(key), value, HeyiCacheFnSetTestCacheStruct, HeyiCacheFnSizeTestCacheStruct, 60) // 60 seconds expiration
+	err = cache.Set([]byte(key), value, HeyiCacheFnTestCacheStructIfc_, 60) // 60 seconds expiration
 	if err != nil {
 		fmt.Println("Error setting value:", err)
 		return
@@ -123,7 +131,7 @@ func main() {
 	ctx := heyicache.NewLeaseCtx(context.Background()) // init a new context with heyi cache lease
 	leaseCtx := heyicache.GetLeaseCtx(ctx)
 	leaseCache := leaseCtx.GetLease(cache)
-	data, err := cache.Get(leaseCache, []byte(key), HeyiCacheFnGetTestCacheStruct)
+	data, err := cache.Get(leaseCache, []byte(key), HeyiCacheFnTestCacheStructIfc_)
 	if err != nil {
 		fmt.Println("Error getting value:", err)
 		return
@@ -139,13 +147,52 @@ func main() {
 	heyicache.GetLeaseCtx(ctx).Done()
 }
 ```
+
 ## 内存映射实现原理
 heyicache先从buffer中申请好指定长度[]byte，再将struct的空间内存，映射到这一段[]byte中
 
 完成Set之后，Get就相对简单了，只需要将[]byte内存取出来，然后取前StructSize的[]byte强转成Struct指针就行
 
 内存映射原理如下图所示
-![image](https://github.com/yuadsl3010/heyicache-benchmark/blob/master/img/heyicache.svg)
+![image](https://github.com/yuadsl3010/heyicache-benchmark/blob/master/img/memory-mapping.svg)
+
+## cache读写实现原理
+heyicache会初始化256个segment，每个segment初始化10个buffer、1个entry数组、1个256长度的slotLen map
+
+先介绍一下entry数组和slotLen（这里是完全复用的freecache的逻辑和实现）：
+
+entry数组长度总是256（slot个数） * 2的倍数，例如：如果entry长度是1024，那么[0~3]属于0号slot，[4~7]属于1号slot，如果我们锁定了1号slot，且slotLen[1] = 3，则我们只需要对entry[4~7]中的[4~6]进行二分查找即可
+
+内存读写原理如下图所示
+![image](https://github.com/yuadsl3010/heyicache-benchmark/blob/master/img/get:set.svg)
+
+## 数据淘汰实现原理
+接下来说一下10个buffer的用法，首先每个buffer的size是相等的，他们相加等于一个segment，也就是总cache size的1/256
+
+curBlock取值范围为0～9（也就是buffer数量），从0开始，写满buffer[0]后，curBlock改为1，继续写buffer[1]
+
+nextBlock为curBlock的下一个取值，如果curBlock为9，则nextBlock为0
+
+当curBlock写到超过EvictionTriggerTiming时（默认是50%），会开启nextBlock的eviction。此时nextBlock禁止读取，在确认nextBlock没有任何访问之后，对nextBlock的buffer和entry进行回收
+
+一个直观的例子，EvictionTriggerTiming为80%时，cache size写入到98%时，开始eviction，确认next block没有访问依赖时会进行回收，cache size降为88%
+
+数据淘汰原理如下图所示
+![image](https://github.com/yuadsl3010/heyicache-benchmark/blob/master/img/eviction.svg)
+
+## lease实现原理
+由于我们需要知道，一个block是否有访问依赖，所以引入lease机制
+
+cache和任何一份lease都同时持有 [segment count][block count]int32 的数组
+
+例如：
+
+从segment 3的block 5中Get了一个对象，cache 和 lease中的[3][5] 都会+1
+
+在ctx生命周期终止时，cache会减去lease，如果next block正好处于eviction且used = 0，则进行清理
+
+数据淘汰原理如下图所示
+![image](https://github.com/yuadsl3010/heyicache-benchmark/blob/master/img/lease.svg)
 
 ## 使用限制
 如此巨大的性能提升，but at what cost?
@@ -159,16 +206,14 @@ value必须是*struct，且struct中的map成员无法被cache且会被强制指
 所以value必须是只读的
 
 tips: 我自己在业务实践的时候，也会去修改其中的某个静态变量（uint64、bool这种），因为这种变量存在在连续内存中，不会被gc回收，算是一个比较hack的使用方式。但用户在修改前，一定要清楚的知道自己在修改什么，否则会引发panic
-### 3. 极少量的写错误、少量的内存限制超出和稍高的数据过期概率
-由于内存映射的关系，heyicache的淘汰最小单位是一个segment（与freecache一样，有256个segment，例如cache总空间是256MB，那么一次淘汰就是1MB）
+### 3. 稍高的数据过期概率
+由于内存映射的关系，heyicache的淘汰最小单位是一个segment中的一个buffer（与freecache一样，有256个segment，每个segment有10个buffer，例如cache总空间是256MB，那么一个segment就是1MB，一个buffer也就一次淘汰的内存就是100kb；与之相对的，freecache的会按照近似FIFO的方法淘汰一个）
 
 因为无法知道这个segment上哪些数据正在被访问，所以当buffer写满的时候，只能新创建一个buffer，老buffer确认无法访问之后再回收
 
 这样的特性导致：
 
-当老buffer还未被回收的时候，无法创建新buffer，此时写入会失败（默认是3份buffer，也就极端情况下一个buffer会膨胀到预设的3倍；正常情况下，回收及时并不会超过预设值）
-
-同理，一次性回收一整个segment，必然会导致一些数据被提前淘汰，也会带来cache率的些许下降
+内存写满时，数据过期概率相对freecache或者bigcache稍高一些
 
 根据我自己的业务实践，相比性能的提升，cache率少许下降带来的损失可以忽略不计
 ### 4. 需要在get的数据不再访问后，主动进行lease的归还
