@@ -119,104 +119,96 @@ func (seg *segment) eviction() error {
 	return nil
 }
 
-func (seg *segment) alloc(key []byte, valueSize int32) ([]byte, int64, error) {
-	// param check
+func (seg *segment) set(key []byte, value interface{}, valueSize int32, hashVal uint64, expireSeconds int, fn HeyiCacheFnIfc) error {
+	// check large key
 	if len(key) > 65535 {
-		return nil, 0, ErrLargeKey
+		return ErrLargeKey
 	}
 
-	// check buffer size
-	allSize := ENTRY_HDR_SIZE + int64(len(key)) + int64(valueSize)
-	if !seg.enough(allSize) {
-		// not enough space in segment, return error.
-		// the caller should try to allocate a new segment.
-		err := seg.eviction()
-		if err != nil {
-			return nil, 0, err
-		}
-
-		if !seg.enough(allSize) {
-			// still not enough space, return error.
-			return nil, 0, ErrValueTooBig
-		}
+	// check large key + value
+	maxKeyValLen := int(seg.getCurBuffer().size/4 - ENTRY_HDR_SIZE)
+	if len(key)+int(valueSize) > maxKeyValLen {
+		// Do not accept large entry.
+		return ErrLargeEntry
 	}
 
-	// direct alloc buffer
-	index := seg.getCurBuffer().index
-	return seg.getCurBuffer().Alloc(allSize), index, nil
-}
-
-func (seg *segment) createHdr(block int32, key []byte, valueSize int32, hashVal uint64, expireSeconds int) (*entryHdr, []byte, error) {
 	// check if the key already exists
 	slotId := uint8(hashVal >> 8)
 	hash16 := uint16(hashVal >> 16)
 	slot := seg.getSlot(slotId)
 	idx, match := seg.lookup(slot, hash16, key)
 	if match {
-		if seg.minWriteInterval == 0 {
-			// the exist memory can not be modified, so we need to delete it
-			atomic.AddInt64(&seg.overwriteCount, 1)
-			seg.delEntryPtr(slotId, slot, idx)
-		} else {
-			// need to check if the write interval is too short
+		skip := false
+		if seg.minWriteInterval > 0 {
 			ptr := &slot[idx]
 			hdr := seg.getHdr(ptr)
 			if seg.timer.Now()-hdr.accessTime <= uint32(seg.minWriteInterval) {
 				// the write interval is too short, skip this write
-				atomic.AddInt64(&seg.skipWriteCount, 1)
-				return nil, nil, ErrDuplicateWrite
-			} else {
-				// the write interval is long enough, we can overwrite the old entry(actually delete it and rewrite another one)
-				atomic.AddInt64(&seg.overwriteCount, 1)
-				seg.delEntryPtr(slotId, slot, idx)
+				skip = true
 			}
+		}
+
+		if !skip {
+			// the exist memory can not be modified, so we need to delete it
+			atomic.AddInt64(&seg.overwriteCount, 1)
+			seg.delEntryPtr(slotId, slot, idx)
+		} else {
+			// the write interval is too short, skip this write
+			atomic.AddInt64(&seg.skipWriteCount, 1)
+			return ErrDuplicateWrite
 		}
 	}
 
-	// allocate space in segment
-	bs, index, err := seg.alloc(key, valueSize)
-	if err != nil {
-		atomic.AddInt64(&seg.writeErrCount, 1)
-		return nil, nil, err
+	// check buffer size
+	entryLen := ENTRY_HDR_SIZE + int64(len(key)) + int64(valueSize)
+	if !seg.enough(entryLen) {
+		// not enough space in segment, return error.
+		// the caller should try to allocate a new segment.
+		err := seg.eviction()
+		if err != nil {
+			return err
+		}
+
+		if !seg.enough(entryLen) {
+			// still not enough space, return error.
+			return ErrValueTooBig
+		}
+
+		// every time we expand the segment, we need to re-check the key
+		slot = seg.getSlot(slotId)
+		idx, _ = seg.lookup(slot, hash16, key)
 	}
 
-	if seg.curBlock != block {
-		// segment has been expanded, re-allocate space
-		atomic.AddInt64(&seg.writeErrCount, 1)
-		return nil, nil, ErrSegmentCleaning
-	}
-
-	// init a new entry header
-	hdr := (*entryHdr)(unsafe.Pointer(&bs[0]))
-	// expire time
+	// prepare expire
 	now := seg.timer.Now()
 	expireAt := uint32(0)
 	if expireSeconds > 0 {
 		expireAt = now + uint32(expireSeconds)
 	}
-
-	// header detail
+	// write to cache
+	buf := seg.getCurBuffer()
+	offset := buf.index
+	bs := buf.Alloc(entryLen)
+	// 1. write entry header
+	hdr := (*entryHdr)(unsafe.Pointer(&bs[0]))
 	hdr.slotId = slotId
 	hdr.hash16 = hash16
 	hdr.keyLen = uint16(len(key))
-	hdr.valLen = uint32(valueSize)
-	hdr.valCap = uint32(valueSize)
 	hdr.accessTime = now
 	hdr.expireAt = expireAt
-	hdr.deleted = true // mark as deleted first, then write the key and value
+	hdr.valLen = uint32(valueSize)
 
-	// insert the node
-	seg.insertEntryPtr(slotId, hash16, index, idx, hdr.keyLen)
-	atomic.AddInt64(&seg.writeCount, 1)
-	return hdr, bs, nil
-}
-
-func (seg *segment) write(bs []byte, key []byte, value interface{}, fn HeyiCacheFnIfc) {
-	// cache 1. write key
+	// 2. write key
 	copy(bs[ENTRY_HDR_SIZE:], key)
 
-	// cache 2. write value
+	// 3. write value
 	fn.Set(value, bs[ENTRY_HDR_SIZE+int64(len(key)):], true)
+
+	// insert the node
+	seg.insertEntryPtr(slotId, hash16, offset, idx, hdr.keyLen)
+	atomic.AddInt64(&seg.writeCount, 1)
+
+	return nil
 }
 
 func (seg *segment) get(key []byte, fn HeyiCacheFnIfc, hashVal uint64, peek bool) (interface{}, error) {

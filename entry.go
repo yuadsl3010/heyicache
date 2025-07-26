@@ -23,8 +23,8 @@ type entryHdr struct {
 	keyLen     uint16
 	hash16     uint16
 	valLen     uint32
-	valCap     uint32
 	deleted    bool
 	slotId     uint8
 	_          uint16
+	_          uint32
 }

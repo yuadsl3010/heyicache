@@ -54,54 +54,21 @@ func NewCache(config Config) (*Cache, error) {
 	return cache, nil
 }
 
-func (cache *Cache) set(key []byte, value interface{}, fn HeyiCacheFnIfc, expireSeconds int, canRetry bool) error {
+func (cache *Cache) set(key []byte, value interface{}, fn HeyiCacheFnIfc, expireSeconds int) error {
 	hashVal := hashFunc(key)
 	segID := getSegID(hashVal)
 	valueSize := fn.Size(value, true)
 
 	// create hdr and buffer to write
 	cache.locks[segID].Lock()
-	segment := &cache.segments[segID]
-	block := segment.curBlock
-	segment.update(block, 1) // keep current buffer not cleaned up
-	hdr, bs, err := segment.createHdr(block, key, valueSize, hashVal, expireSeconds)
-	if err != nil {
-		segment.update(block, -1)
-		cache.locks[segID].Unlock()
-		if err == ErrSegmentCleaning && canRetry {
-			// give one more chance to retry
-			return cache.set(key, value, fn, expireSeconds, false)
-		}
-
-		return err
-	}
-
+	err := cache.segments[segID].set(key, value, valueSize, hashVal, expireSeconds, fn)
 	cache.locks[segID].Unlock()
 
-	// write the key and value into the segment
-	// assume fnSet will take lots of time, so we should not hold the lock
-	segment.write(bs, key, value, fn)
-
-	cache.locks[segID].Lock()
-	segment.update(block, -1)
-	if segment.curBlock != block {
-		// segment has been expanded, re-allocate space
-		cache.locks[segID].Unlock()
-		if canRetry {
-			// give one more chance to retry
-			return cache.set(key, value, fn, expireSeconds, false)
-		}
-		return ErrSegmentCleaning
-	}
-
-	// update header so it can be read later
-	hdr.deleted = false // mark as not deleted
-	cache.locks[segID].Unlock()
 	return err
 }
 
 func (cache *Cache) Set(key []byte, value interface{}, fn HeyiCacheFnIfc, expireSeconds int) error {
-	return cache.set(key, value, fn, expireSeconds, true)
+	return cache.set(key, value, fn, expireSeconds)
 }
 
 func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, peak bool) (interface{}, error) {
@@ -115,6 +82,7 @@ func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, peak bool) 
 	segment := &cache.segments[segID]
 	value, err := segment.get(key, fn, hashVal, peak)
 	if err == nil {
+		// later need to return the lease to keep the used = 0
 		segment.update(segment.curBlock, 1)
 		lease.keeps[segID][segment.curBlock] += 1
 	}
