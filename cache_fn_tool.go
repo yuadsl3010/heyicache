@@ -19,8 +19,17 @@ var (
 	funcSet         = prefix + "Set"
 )
 
+func GenCacheFn(obj interface{}) {
+	genCacheFn(obj, false)
+}
+
+// if your package is main, use this to generate the code
+func GenCacheFnIsMainPkgStruct(obj interface{}) {
+	genCacheFn(obj, true)
+}
+
 // you can use this tool to generate the function Set(), Get() and Size()
-func GenCacheFn(obj interface{}, isMainPkgStruct bool) {
+func genCacheFn(obj interface{}, isMainPkgStruct bool) {
 	t := reflect.TypeOf(obj)
 	if t.Kind() != reflect.Struct {
 		fmt.Println("only support struct type")
@@ -43,11 +52,11 @@ func GenCacheFn(obj interface{}, isMainPkgStruct bool) {
 	typeInfos := collectSubStructPackages(t, make(map[string]*TypeInfo))
 	fmt.Println("sub struct type infos:")
 	for _, info := range typeInfos {
-		genCacheFn(info.T, callerPkg, callerPkgName, isMainPkgStruct, info.GetPkgs())
+		xxx_genCacheFn(info.T, callerPkg, callerPkgName, isMainPkgStruct, info.GetPkgs())
 	}
 }
 
-func genCacheFn(t reflect.Type, callerPkg string, callerPkgName string, isMainPkgStruct bool, subPkgs []string) {
+func xxx_genCacheFn(t reflect.Type, callerPkg string, callerPkgName string, isMainPkgStruct bool, subPkgs []string) {
 	// reverse struct type to get field tools
 	fieldTools := getFieldTools(t)
 
