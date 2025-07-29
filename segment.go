@@ -23,7 +23,7 @@ type segment struct {
 	segId             int32
 	curBlock          int32
 	nextBlock         int32
-	_                 int32
+	isEviction        bool
 	timer             Timer // Timer giving current time
 	entryCount        int64
 	evictionNum       int64
@@ -64,6 +64,22 @@ func newSegment(bufSize int64, segId int32, evictionTriggerTiming float32, minWr
 	return seg
 }
 
+func (seg *segment) readyForClose() bool {
+	for i := 0; i < int(blockCount); i++ {
+		if seg.bufs[i].used > 0 {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (seg *segment) close() {
+	for i := 0; i < int(blockCount); i++ {
+		seg.bufs[i].data = nil // release the memory
+	}
+}
+
 func (seg *segment) getBuffer(ptr *entryPtr) *buffer {
 	return seg.bufs[ptr.block]
 }
@@ -81,7 +97,7 @@ func (seg *segment) enough(allSize int64) bool {
 }
 
 func (seg *segment) isInEviction(block int32) bool {
-	return seg.nextBlock == block && seg.getCurBuffer().index >= seg.evictionSize
+	return seg.nextBlock == block && seg.isEviction
 }
 
 //go:inline
@@ -106,6 +122,7 @@ func (seg *segment) update(block int32, k int32) {
 		atomic.AddInt64(&seg.evictionCount, 1)
 		buf.index = 0
 		buf.data = make([]byte, buf.size)
+		seg.isEviction = false
 	}
 }
 
@@ -126,14 +143,14 @@ func (seg *segment) eviction() error {
 	return nil
 }
 
-func (seg *segment) set(key []byte, value interface{}, valueSize int32, hashVal uint64, expireSeconds int, fn HeyiCacheFnIfc) error {
+func (seg *segment) set(key []byte, value interface{}, valueSize int32, hashVal uint64, expireSeconds int, isStorage bool, fn HeyiCacheFnIfc) error {
 	// check large key
 	if len(key) > 65535 {
 		return ErrLargeKey
 	}
 
 	// check large key + value
-	maxKeyValLen := int(seg.getCurBuffer().size/4 - ENTRY_HDR_SIZE)
+	maxKeyValLen := int(seg.getCurBuffer().size - ENTRY_HDR_SIZE)
 	if len(key)+int(valueSize) > maxKeyValLen {
 		// Do not accept large entry.
 		return ErrLargeEntry
@@ -169,6 +186,13 @@ func (seg *segment) set(key []byte, value interface{}, valueSize int32, hashVal 
 	// check buffer size
 	entryLen := ENTRY_HDR_SIZE + int64(len(key)) + int64(valueSize)
 	if !seg.enough(entryLen) {
+		if isStorage {
+			// storage mode won't evict data
+			return ErrSegmentFull
+		}
+
+		// trigger eviction if no enough space
+		seg.isEviction = true
 		// not enough space in segment, return error.
 		// the caller should try to allocate a new segment.
 		err := seg.eviction()
@@ -189,13 +213,17 @@ func (seg *segment) set(key []byte, value interface{}, valueSize int32, hashVal 
 	// prepare expire
 	now := seg.timer.Now()
 	expireAt := uint32(0)
-	if expireSeconds > 0 {
+	if expireSeconds > 0 && !isStorage {
 		expireAt = now + uint32(expireSeconds)
 	}
 	// write to cache
 	buf := seg.getCurBuffer()
 	offset := buf.index
 	bs := buf.Alloc(entryLen)
+	// if the cache size higher than the eviction size, set the isEviction flag
+	if buf.index > seg.evictionSize {
+		seg.isEviction = true
+	}
 	// 1. write entry header
 	hdr := (*entryHdr)(unsafe.Pointer(&bs[0]))
 	hdr.slotId = slotId
@@ -221,6 +249,9 @@ func (seg *segment) set(key []byte, value interface{}, valueSize int32, hashVal 
 func (seg *segment) get(key []byte, fn HeyiCacheFnIfc, hashVal uint64, peek bool) (interface{}, error) {
 	hdr, ptr, err := seg.locate(key, hashVal, peek)
 	if err != nil {
+		if !peek {
+			atomic.AddInt64(&seg.missCount, 1)
+		}
 		return nil, err
 	}
 
@@ -233,7 +264,7 @@ func (seg *segment) get(key []byte, fn HeyiCacheFnIfc, hashVal uint64, peek bool
 	return fn.Get(bs), nil
 }
 
-func (seg *segment) del(key []byte, hashVal uint64) (affected bool) {
+func (seg *segment) del(key []byte, hashVal uint64) bool {
 	slotId := uint8(hashVal >> 8)
 	hash16 := uint16(hashVal >> 16)
 	slot := seg.getSlot(slotId)
@@ -251,18 +282,12 @@ func (seg *segment) locate(key []byte, hashVal uint64, peek bool) (*entryHdr, *e
 	slot := seg.getSlot(slotId)
 	idx, match := seg.lookup(slot, hash16, key)
 	if !match {
-		if !peek {
-			atomic.AddInt64(&seg.missCount, 1)
-		}
 		return nil, nil, ErrNotFound
 	}
 
 	ptr := &slot[idx]
 	hdr := seg.getHdr(ptr)
 	if hdr.deleted {
-		if !peek {
-			atomic.AddInt64(&seg.missCount, 1)
-		}
 		return nil, nil, ErrNotFound
 	}
 
@@ -275,7 +300,6 @@ func (seg *segment) locate(key []byte, hashVal uint64, peek bool) (*entryHdr, *e
 		if isExpired(hdr.expireAt, now) {
 			seg.delEntryPtr(slotId, slot, idx)
 			atomic.AddInt64(&seg.expireCount, 1)
-			atomic.AddInt64(&seg.missCount, 1)
 			return nil, nil, ErrNotFound
 		}
 		hdr.accessTime = now
