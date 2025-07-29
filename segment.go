@@ -100,7 +100,6 @@ func (seg *segment) isInEviction(block int32) bool {
 	return seg.nextBlock == block && seg.isEviction
 }
 
-//go:inline
 func (seg *segment) update(block int32, k int32) {
 	seg.bufs[block].used += k
 	if !seg.isInEviction(block) {
