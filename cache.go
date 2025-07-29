@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/cespare/xxhash/v2"
 )
@@ -20,9 +21,10 @@ const (
 
 // cache instance, refer to freecache but do more performance optimizations based on arena memory
 type Cache struct {
-	Name     string
-	locks    [segCount]sync.Mutex
-	segments [segCount]segment
+	Name      string
+	IsStorage bool // true means this cache is used for storage, false means this cache is used for memory cache
+	locks     [segCount]sync.Mutex
+	segments  [segCount]segment
 }
 
 func hashFunc(data []byte) uint64 {
@@ -51,7 +53,8 @@ func NewCache(config Config) (*Cache, error) {
 	}
 
 	cache := &Cache{
-		Name: config.Name,
+		Name:      config.Name,
+		IsStorage: config.IsStorage,
 	}
 
 	for i := 0; i < int(segCount); i++ {
@@ -61,6 +64,33 @@ func NewCache(config Config) (*Cache, error) {
 	return cache, nil
 }
 
+// once call Close(), cache should NOT be used anymore, just wait for the other goroutines to finish their work and recycle the memory
+func (cache *Cache) Close() {
+	go func() {
+		readyForClose := false
+		for !readyForClose {
+			time.Sleep(time.Second)
+			readyForClose = true
+			for i := 0; i < int(segCount); i++ {
+				cache.locks[i].Lock()
+				if !cache.segments[i].readyForClose() {
+					cache.locks[i].Unlock()
+					readyForClose = false
+					break
+				}
+				cache.locks[i].Unlock()
+			}
+		}
+
+		for i := 0; i < int(segCount); i++ {
+			cache.locks[i].Lock()
+			cache.segments[i].close()
+			cache.segments[i].slotsData = nil
+			cache.locks[i].Unlock()
+		}
+	}()
+}
+
 func (cache *Cache) set(key []byte, value interface{}, fn HeyiCacheFnIfc, expireSeconds int) error {
 	hashVal := hashFunc(key)
 	segID := hashVal & segAndOpVal
@@ -68,7 +98,7 @@ func (cache *Cache) set(key []byte, value interface{}, fn HeyiCacheFnIfc, expire
 
 	// create hdr and buffer to write
 	cache.locks[segID].Lock()
-	err := cache.segments[segID].set(key, value, valueSize, hashVal, expireSeconds, fn)
+	err := cache.segments[segID].set(key, value, valueSize, hashVal, expireSeconds, cache.IsStorage, fn)
 	cache.locks[segID].Unlock()
 
 	return err
@@ -79,7 +109,7 @@ func (cache *Cache) Set(key []byte, value interface{}, fn HeyiCacheFnIfc, expire
 }
 
 func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, peak bool) (interface{}, error) {
-	if lease == nil {
+	if lease == nil && !cache.IsStorage {
 		return nil, ErrNilLeaseCtx
 	}
 
@@ -88,7 +118,7 @@ func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, peak bool) 
 	cache.locks[segID].Lock()
 	segment := &cache.segments[segID]
 	value, err := segment.get(key, fn, hashVal, peak)
-	if err == nil {
+	if err == nil && !cache.IsStorage {
 		// later need to return the lease to keep the used = 0
 		segment.update(segment.curBlock, 1)
 		atomic.AddInt32(&lease.keeps[segID][segment.curBlock], 1) // use atomic to avoid the lease being modified by other goroutines

@@ -26,20 +26,20 @@ func (cache *Cache) GetAndResetStat() *Stat {
 	stat := &Stat{}
 	for i := range cache.segments {
 		cache.locks[i].Lock()
-		stat.EvictionNum += atomic.LoadInt64(&cache.segments[i].evictionNum)
-		stat.EvictionCount += atomic.LoadInt64(&cache.segments[i].evictionCount)
-		stat.EvictionWaitCount += atomic.LoadInt64(&cache.segments[i].evictionWaitCount)
-		stat.ExpireCount += atomic.LoadInt64(&cache.segments[i].expireCount)
-		stat.EntryCount += atomic.LoadInt64(&cache.segments[i].entryCount)
-		stat.EntryCap += int64(len(cache.segments[i].slotsData))
-		stat.HitCount += atomic.LoadInt64(&cache.segments[i].hitCount)
-		stat.MissCount += atomic.LoadInt64(&cache.segments[i].missCount)
-		stat.ReadCount += stat.HitCount + stat.MissCount
-		stat.WriteCount += atomic.LoadInt64(&cache.segments[i].writeCount)
-		stat.WriteErrCount += atomic.LoadInt64(&cache.segments[i].writeErrCount)
-		stat.OverwriteCount += atomic.LoadInt64(&cache.segments[i].overwriteCount)
-		stat.SkipWriteCount += atomic.LoadInt64(&cache.segments[i].skipWriteCount)
-		for _, buf := range &cache.segments[i].bufs {
+		seg := &cache.segments[i]
+		stat.EvictionNum += atomic.LoadInt64(&seg.evictionNum)
+		stat.EvictionCount += atomic.LoadInt64(&seg.evictionCount)
+		stat.EvictionWaitCount += atomic.LoadInt64(&seg.evictionWaitCount)
+		stat.ExpireCount += atomic.LoadInt64(&seg.expireCount)
+		stat.EntryCount += atomic.LoadInt64(&seg.entryCount)
+		stat.EntryCap += int64(len(seg.slotsData))
+		stat.HitCount += atomic.LoadInt64(&seg.hitCount)
+		stat.MissCount += atomic.LoadInt64(&seg.missCount)
+		stat.WriteCount += atomic.LoadInt64(&seg.writeCount)
+		stat.WriteErrCount += atomic.LoadInt64(&seg.writeErrCount)
+		stat.OverwriteCount += atomic.LoadInt64(&seg.overwriteCount)
+		stat.SkipWriteCount += atomic.LoadInt64(&seg.skipWriteCount)
+		for _, buf := range &seg.bufs {
 			stat.MemUsed += buf.index
 			stat.MemSize += buf.size
 		}
@@ -47,5 +47,7 @@ func (cache *Cache) GetAndResetStat() *Stat {
 		cache.segments[i].resetStatistics()
 		cache.locks[i].Unlock()
 	}
+
+	stat.ReadCount = stat.HitCount + stat.MissCount
 	return stat
 }

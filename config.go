@@ -21,6 +21,12 @@ type Config struct {
 	// Minimum seconds interval to write the same key, default is 0, means no limit
 	MinWriteInterval int32
 
+	// true means this cache is used for storage (all data will be kept until the cache is closed), storage mode has some features like:
+	// 1. never evict the data, no matter the cache if full or data is expired
+	// 2. no need to pass LeaseCtx
+	// default is false, means this cache is used for memory cache, data will be evicted when the cache is full or data is expired
+	IsStorage bool
+
 	// Custom timer
 	CustomTimer Timer
 }
