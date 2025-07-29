@@ -120,7 +120,7 @@ func (seg *segment) update(block int32, k int32) {
 
 		atomic.AddInt64(&seg.evictionCount, 1)
 		buf.index = 0
-		buf.data = make([]byte, buf.size)
+		// buf.data = make([]byte, buf.size)
 		seg.isEviction = false
 	}
 }
@@ -225,6 +225,7 @@ func (seg *segment) set(key []byte, value interface{}, valueSize int32, hashVal 
 	}
 	// 1. write entry header
 	hdr := (*entryHdr)(unsafe.Pointer(&bs[0]))
+	hdr.deleted = false
 	hdr.slotId = slotId
 	hdr.hash16 = hash16
 	hdr.keyLen = uint16(len(key))
