@@ -3,7 +3,7 @@
 
 既不想cache过多的指针导致gc过慢，也不想切换zero gc cache迫使读写时强制做编解码转换
 
-那么，heyicache is all your need
+那么，heyicache is all you need
 
 ## 为什么是HeyiCache？
 heyicache参考自freecache的缓存结构设计，继承了freecache的许多优点
@@ -86,7 +86,7 @@ import (
 )
 
 func TestFnGenerateTool(t *testing.T) {
-	heyicache.GenCacheFn(TestCacheStruct{}, true)
+	heyicache.GenCacheFn(TestCacheStruct{})
 }
 ```
 执行后将得到一个go文件，里面包含HeyiCacheFnTestCacheStructIfc_实例

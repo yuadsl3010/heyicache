@@ -93,7 +93,7 @@ import (
 )
 
 func TestFnGenerateTool(t *testing.T) {
-	heyicache.GenCacheFn(TestCacheStruct{}, true)
+	heyicache.GenCacheFn(TestCacheStruct{})
 }
 ```
 This will generate a Go file containing the three required functions: HeyiCacheFnGetTestCacheStruct, HeyiCacheFnSizeTestCacheStruct, and HeyiCacheFnSetTestCacheStruct
