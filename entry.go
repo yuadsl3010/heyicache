@@ -18,7 +18,7 @@ type entryPtr struct {
 
 // entry header struct in ring buffer, followed by key and value.
 type entryHdr struct {
-	accessTime uint32
+	createTime uint32
 	expireAt   uint32
 	keyLen     uint16
 	hash16     uint16

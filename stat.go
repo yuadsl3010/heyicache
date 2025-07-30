@@ -1,7 +1,5 @@
 package heyicache
 
-import "sync/atomic"
-
 type Stat struct {
 	EvictionNum       int64   // number of evictions
 	EvictionCount     int64   // number of times eviction was called
@@ -27,18 +25,18 @@ func (cache *Cache) GetAndResetStat() *Stat {
 	for i := range cache.segments {
 		cache.locks[i].Lock()
 		seg := &cache.segments[i]
-		stat.EvictionNum += atomic.LoadInt64(&seg.evictionNum)
-		stat.EvictionCount += atomic.LoadInt64(&seg.evictionCount)
-		stat.EvictionWaitCount += atomic.LoadInt64(&seg.evictionWaitCount)
-		stat.ExpireCount += atomic.LoadInt64(&seg.expireCount)
-		stat.EntryCount += atomic.LoadInt64(&seg.entryCount)
+		stat.EvictionNum += seg.evictionNum
+		stat.EvictionCount += seg.evictionCount
+		stat.EvictionWaitCount += seg.evictionWaitCount
+		stat.ExpireCount += seg.expireCount
+		stat.EntryCount += seg.entryCount
 		stat.EntryCap += int64(len(seg.slotsData))
-		stat.HitCount += atomic.LoadInt64(&seg.hitCount)
-		stat.MissCount += atomic.LoadInt64(&seg.missCount)
-		stat.WriteCount += atomic.LoadInt64(&seg.writeCount)
-		stat.WriteErrCount += atomic.LoadInt64(&seg.writeErrCount)
-		stat.OverwriteCount += atomic.LoadInt64(&seg.overwriteCount)
-		stat.SkipWriteCount += atomic.LoadInt64(&seg.skipWriteCount)
+		stat.HitCount += seg.hitCount
+		stat.MissCount += seg.missCount
+		stat.WriteCount += seg.writeCount
+		stat.WriteErrCount += seg.writeErrCount
+		stat.OverwriteCount += seg.overwriteCount
+		stat.SkipWriteCount += seg.skipWriteCount
 		for _, buf := range &seg.bufs {
 			stat.MemUsed += buf.index
 			stat.MemSize += buf.size

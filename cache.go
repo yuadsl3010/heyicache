@@ -91,7 +91,7 @@ func (cache *Cache) Close() {
 	}()
 }
 
-func (cache *Cache) set(key []byte, value interface{}, fn HeyiCacheFnIfc, expireSeconds int) error {
+func (cache *Cache) Set(key []byte, value interface{}, fn HeyiCacheFnIfc, expireSeconds int) error {
 	hashVal := hashFunc(key)
 	segID := hashVal & segAndOpVal
 	valueSize := fn.Size(value, true)
@@ -104,11 +104,8 @@ func (cache *Cache) set(key []byte, value interface{}, fn HeyiCacheFnIfc, expire
 	return err
 }
 
-func (cache *Cache) Set(key []byte, value interface{}, fn HeyiCacheFnIfc, expireSeconds int) error {
-	return cache.set(key, value, fn, expireSeconds)
-}
-
-func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, peak bool) (interface{}, error) {
+// Drop the Peek() method, it could be replace by Storage mode if you don't want any data expire or eviction
+func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
 	if lease == nil && !cache.IsStorage {
 		return nil, ErrNilLeaseCtx
 	}
@@ -117,23 +114,14 @@ func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, peak bool) 
 	segID := hashVal & segAndOpVal
 	cache.locks[segID].Lock()
 	segment := &cache.segments[segID]
-	value, err := segment.get(key, fn, hashVal, peak)
+	value, err := segment.get(key, fn, hashVal)
 	if err == nil && !cache.IsStorage {
 		// later need to return the lease to keep the used = 0
-		segment.update(segment.curBlock, 1)
+		segment.bufs[segment.curBlock].used += 1
 		atomic.AddInt32(&lease.keeps[segID][segment.curBlock], 1) // use atomic to avoid the lease being modified by other goroutines
 	}
 	cache.locks[segID].Unlock()
 	return value, err
-}
-
-func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
-	return cache.get(lease, key, fn, false)
-}
-
-// keep peak feature following the freecache design
-func (cache *Cache) Peek(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
-	return cache.get(lease, key, fn, true)
 }
 
 // Del deletes an item in the cache by key and returns true or false if a delete occurred.

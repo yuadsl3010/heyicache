@@ -2,7 +2,6 @@ package heyicache
 
 import (
 	"errors"
-	"sync/atomic"
 	"time"
 	"unsafe"
 )
@@ -100,43 +99,31 @@ func (seg *segment) isInEviction(block int32) bool {
 	return seg.nextBlock == block && seg.isEviction
 }
 
-func (seg *segment) update(block int32, k int32) {
-	seg.bufs[block].used += k
-	if !seg.isInEviction(block) {
-		return
-	}
-
-	// only clear the next block when current block reach eviction size
-	buf := seg.bufs[seg.nextBlock]
-	if buf.used == 0 {
-		// clear the buffer
-		offset := int64(0)
-		for offset+ENTRY_HDR_SIZE <= buf.index {
-			hdr := (*entryHdr)(unsafe.Pointer(&buf.data[offset]))
-			seg.delEntryPtrByOffset(hdr.slotId, hdr.hash16, offset)
-			atomic.AddInt64(&seg.evictionNum, 1)
-			offset = offset + ENTRY_HDR_SIZE + int64(hdr.keyLen) + int64(hdr.valLen)
-		}
-
-		atomic.AddInt64(&seg.evictionCount, 1)
-		buf.index = 0
-		// buf.data = make([]byte, buf.size)
-		seg.isEviction = false
-	}
-}
-
 func (seg *segment) eviction() error {
-	if seg.bufs[seg.nextBlock].used > 0 {
+	buf := seg.bufs[seg.nextBlock]
+	if buf.used > 0 {
 		// it's only two cases
 		// 1. the speed of generating is too fast: expand the cache size
 		// 2. some interfaces getted from Get() but not released by Done(): check the code logic
 		// for case 1, I think 3 buffers are enough, just expand the cache size will decrease the write error ratio
-		atomic.AddInt64(&seg.evictionWaitCount, 1)
+		seg.evictionWaitCount += 1
 		return ErrSegmentFull
 	}
 
 	// clean the next block
-	seg.update(seg.nextBlock, 0)
+	offset := int64(0)
+	for offset+ENTRY_HDR_SIZE <= buf.index {
+		hdr := (*entryHdr)(unsafe.Pointer(&buf.data[offset]))
+		if !hdr.deleted {
+			seg.delEntryPtrByOffset(hdr.slotId, hdr.hash16, offset)
+			seg.evictionNum += 1
+		}
+		offset = offset + ENTRY_HDR_SIZE + int64(hdr.keyLen) + int64(hdr.valLen)
+	}
+
+	buf.index = 0
+	seg.evictionCount += 1
+	seg.isEviction = false
 	seg.curBlock = seg.nextBlock
 	seg.nextBlock = (seg.curBlock + 1) % blockCount
 	return nil
@@ -165,7 +152,7 @@ func (seg *segment) set(key []byte, value interface{}, valueSize int32, hashVal 
 		if seg.minWriteInterval > 0 {
 			ptr := &slot[idx]
 			hdr := seg.getHdr(ptr)
-			if seg.timer.Now()-hdr.accessTime <= uint32(seg.minWriteInterval) {
+			if seg.timer.Now()-hdr.createTime <= uint32(seg.minWriteInterval) {
 				// the write interval is too short, skip this write
 				skip = true
 			}
@@ -173,11 +160,11 @@ func (seg *segment) set(key []byte, value interface{}, valueSize int32, hashVal 
 
 		if !skip {
 			// the exist memory can not be modified, so we need to delete it
-			atomic.AddInt64(&seg.overwriteCount, 1)
+			seg.overwriteCount += 1
 			seg.delEntryPtr(slotId, slot, idx)
 		} else {
 			// the write interval is too short, skip this write
-			atomic.AddInt64(&seg.skipWriteCount, 1)
+			seg.skipWriteCount += 1
 			return ErrDuplicateWrite
 		}
 	}
@@ -229,7 +216,7 @@ func (seg *segment) set(key []byte, value interface{}, valueSize int32, hashVal 
 	hdr.slotId = slotId
 	hdr.hash16 = hash16
 	hdr.keyLen = uint16(len(key))
-	hdr.accessTime = now
+	hdr.createTime = now
 	hdr.expireAt = expireAt
 	hdr.valLen = uint32(valueSize)
 
@@ -241,26 +228,21 @@ func (seg *segment) set(key []byte, value interface{}, valueSize int32, hashVal 
 
 	// insert the node
 	seg.insertEntryPtr(slotId, hash16, offset, idx, hdr.keyLen)
-	atomic.AddInt64(&seg.writeCount, 1)
+	seg.writeCount += 1
 
 	return nil
 }
 
-func (seg *segment) get(key []byte, fn HeyiCacheFnIfc, hashVal uint64, peek bool) (interface{}, error) {
-	hdr, ptr, err := seg.locate(key, hashVal, peek)
+func (seg *segment) get(key []byte, fn HeyiCacheFnIfc, hashVal uint64) (interface{}, error) {
+	hdr, ptr, err := seg.locate(key, hashVal)
 	if err != nil {
-		if !peek {
-			atomic.AddInt64(&seg.missCount, 1)
-		}
+		seg.missCount += 1
 		return nil, err
 	}
 
+	seg.hitCount += 1
 	start := ptr.offset + ENTRY_HDR_SIZE + int64(hdr.keyLen)
 	bs := seg.getBuffer(ptr).Slice(start, int64(hdr.valLen))
-	if !peek {
-		atomic.AddInt64(&seg.hitCount, 1)
-	}
-
 	return fn.Get(bs), nil
 }
 
@@ -276,7 +258,7 @@ func (seg *segment) del(key []byte, hashVal uint64) bool {
 	return true
 }
 
-func (seg *segment) locate(key []byte, hashVal uint64, peek bool) (*entryHdr, *entryPtr, error) {
+func (seg *segment) locate(key []byte, hashVal uint64) (*entryHdr, *entryPtr, error) {
 	slotId := uint8(hashVal >> 8)
 	hash16 := uint16(hashVal >> 16)
 	slot := seg.getSlot(slotId)
@@ -286,24 +268,23 @@ func (seg *segment) locate(key []byte, hashVal uint64, peek bool) (*entryHdr, *e
 	}
 
 	ptr := &slot[idx]
+	if seg.isInEviction(ptr.block) {
+		// data is in next block and current block is in eviction
+		return nil, nil, ErrNotFound
+	}
+
 	hdr := seg.getHdr(ptr)
 	if hdr.deleted {
 		return nil, nil, ErrNotFound
 	}
 
-	if seg.isInEviction(ptr.block) {
+	now := seg.timer.Now()
+	if hdr.expireAt != 0 && hdr.expireAt <= now {
+		seg.delEntryPtr(slotId, slot, idx)
+		seg.expireCount += 1
 		return nil, nil, ErrNotFound
 	}
 
-	if !peek {
-		now := seg.timer.Now()
-		if isExpired(hdr.expireAt, now) {
-			seg.delEntryPtr(slotId, slot, idx)
-			atomic.AddInt64(&seg.expireCount, 1)
-			return nil, nil, ErrNotFound
-		}
-		hdr.accessTime = now
-	}
 	return hdr, ptr, nil
 }
 
@@ -371,7 +352,7 @@ func (seg *segment) insertEntryPtr(slotId uint8, hash16 uint16, offset int64, id
 		seg.expand()
 	}
 	seg.slotsLen[slotId]++
-	atomic.AddInt64(&seg.entryCount, 1)
+	seg.entryCount += 1
 	slot := seg.getSlot(slotId)
 	copy(slot[idx+1:], slot[idx:])
 	slot[idx].offset = offset
@@ -395,7 +376,7 @@ func (seg *segment) delEntryPtr(slotId uint8, slot []entryPtr, idx int) {
 	hdr.deleted = true
 	copy(slot[idx:], slot[idx+1:])
 	seg.slotsLen[slotId]--
-	atomic.AddInt64(&seg.entryCount, -1)
+	seg.entryCount -= 1
 }
 
 func (seg *segment) getSlot(slotId uint8) []entryPtr {
@@ -403,19 +384,15 @@ func (seg *segment) getSlot(slotId uint8) []entryPtr {
 	return seg.slotsData[slotOff : slotOff+seg.slotsLen[slotId] : slotOff+seg.slotCap]
 }
 
-func isExpired(keyExpireAt, now uint32) bool {
-	return keyExpireAt != 0 && keyExpireAt <= now
-}
-
 func (seg *segment) resetStatistics() {
-	atomic.StoreInt64(&seg.evictionNum, 0)
-	atomic.StoreInt64(&seg.evictionCount, 0)
-	atomic.StoreInt64(&seg.evictionWaitCount, 0)
-	atomic.StoreInt64(&seg.expireCount, 0)
-	atomic.StoreInt64(&seg.missCount, 0)
-	atomic.StoreInt64(&seg.hitCount, 0)
-	atomic.StoreInt64(&seg.writeCount, 0)
-	atomic.StoreInt64(&seg.writeErrCount, 0)
-	atomic.StoreInt64(&seg.overwriteCount, 0)
-	atomic.StoreInt64(&seg.skipWriteCount, 0)
+	seg.evictionNum = 0
+	seg.evictionCount = 0
+	seg.evictionWaitCount = 0
+	seg.expireCount = 0
+	seg.missCount = 0
+	seg.hitCount = 0
+	seg.writeCount = 0
+	seg.writeErrCount = 0
+	seg.overwriteCount = 0
+	seg.skipWriteCount = 0
 }

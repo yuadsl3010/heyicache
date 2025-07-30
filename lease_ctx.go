@@ -80,7 +80,11 @@ func (leaseCtx *LeaseCtx) Done() {
 					continue
 				}
 				lease.cache.locks[segID].Lock()
-				lease.cache.segments[segID].update(int32(block), -k)
+				seg := &lease.cache.segments[segID]
+				seg.bufs[block].used -= k
+				if seg.bufs[block].used == 0 && seg.isInEviction(int32(block)) {
+					seg.eviction()
+				}
 				lease.cache.locks[segID].Unlock()
 			}
 		}
