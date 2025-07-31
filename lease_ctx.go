@@ -71,7 +71,7 @@ func (leaseCtx *LeaseCtx) Done() {
 	}
 
 	for _, lease := range leaseCtx.leases {
-		if lease == nil {
+		if lease == nil || lease.cache.IsStorage {
 			continue
 		}
 		for segID, vs := range *(lease.keeps) {
