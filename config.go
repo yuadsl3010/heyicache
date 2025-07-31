@@ -27,6 +27,10 @@ type Config struct {
 	// default is false, means this cache is used for memory cache, data will be evicted when the cache is full or data is expired
 	IsStorage bool
 
+	// true means storage mode can use unlimited size
+	// default is false, which means storage mode will use the MaxSize as limit
+	IsStorageUnlimited bool
+
 	// Custom timer
 	CustomTimer Timer
 }

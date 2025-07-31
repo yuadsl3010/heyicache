@@ -3,6 +3,7 @@ package heyicache
 type Stat struct {
 	EvictionNum       int64   // number of evictions
 	EvictionCount     int64   // number of times eviction was called
+	ExpandCount       int64   // number of times the segment was expanded
 	EvictionWaitCount int64   // number of times eviction wait occurred
 	ExpireCount       int64   // number of times an expire occurred
 	EntryCount        int64   // number of items currently in the cache
@@ -37,7 +38,7 @@ func (cache *Cache) GetAndResetStat() *Stat {
 		stat.WriteErrCount += seg.writeErrCount
 		stat.OverwriteCount += seg.overwriteCount
 		stat.SkipWriteCount += seg.skipWriteCount
-		for _, buf := range &seg.bufs {
+		for _, buf := range seg.bufs {
 			stat.MemUsed += buf.index
 			stat.MemSize += buf.size
 		}

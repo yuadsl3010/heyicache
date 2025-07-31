@@ -12,13 +12,14 @@ var ErrSegmentUnlucky = errors.New("segment is unlucky, please retry")
 var ErrValueTooBig = errors.New("value is too big, please use smaller value or increase cache size")
 var ErrSegmentCleaning = errors.New("segment has been expanded, re-allocate space, please retry")
 var ErrDuplicateWrite = errors.New("write interval less than MinWriteSecondsForSameKey, no need to write again")
+var ErrStorageDupWrite = errors.New("storage mode does not allow duplicate write")
 var maxLocateRetry = 3
 var sleepLocate = 1 * time.Millisecond // ms
 
 // it's quite different from freecache, cause we don't need to use ring buffer
 // once found a segment is full, we will allocate a new segment and release the old one
 type segment struct {
-	bufs              [blockCount]*buffer
+	bufs              []*buffer
 	segId             int32
 	curBlock          int32
 	nextBlock         int32
@@ -45,7 +46,7 @@ type segment struct {
 func newSegment(bufSize int64, segId int32, evictionTriggerTiming float32, minWriteInterval int32, timer Timer) segment {
 	everyBufSize := bufSize / int64(blockCount)
 	seg := segment{
-		bufs:             [blockCount]*buffer{},
+		bufs:             []*buffer{},
 		segId:            segId,
 		timer:            timer,
 		slotCap:          1,
@@ -57,15 +58,15 @@ func newSegment(bufSize int64, segId int32, evictionTriggerTiming float32, minWr
 	}
 
 	for i := 0; i < int(blockCount); i++ {
-		seg.bufs[i] = NewBuffer(everyBufSize)
+		seg.bufs = append(seg.bufs, NewBuffer(everyBufSize))
 	}
 
 	return seg
 }
 
 func (seg *segment) readyForClose() bool {
-	for i := 0; i < int(blockCount); i++ {
-		if seg.bufs[i].used > 0 {
+	for _, buf := range seg.bufs {
+		if buf.used > 0 {
 			return false
 		}
 	}
@@ -74,8 +75,8 @@ func (seg *segment) readyForClose() bool {
 }
 
 func (seg *segment) close() {
-	for i := 0; i < int(blockCount); i++ {
-		seg.bufs[i].data = nil // release the memory
+	for _, buf := range seg.bufs {
+		buf.data = nil // release the memory
 	}
 }
 
@@ -92,13 +93,14 @@ func (seg *segment) getCurBuffer() *buffer {
 }
 
 func (seg *segment) enough(allSize int64) bool {
-	return allSize+seg.getCurBuffer().index < seg.getCurBuffer().size
+	return allSize+seg.getCurBuffer().index <= seg.getCurBuffer().size
 }
 
 func (seg *segment) isInEviction(block int32) bool {
 	return seg.nextBlock == block && seg.isEviction
 }
 
+// only cache mode can use this function
 func (seg *segment) eviction() error {
 	buf := seg.bufs[seg.nextBlock]
 	if buf.used > 0 {
@@ -129,12 +131,28 @@ func (seg *segment) eviction() error {
 	return nil
 }
 
-func (seg *segment) set(key []byte, value interface{}, valueSize int32, hashVal uint64, expireSeconds int, isStorage bool, fn HeyiCacheFnIfc) error {
+// only storage mode can use this function
+func (seg *segment) expandMemory(isStorageUnlimited bool) error {
+	if seg.curBlock == int32(len(seg.bufs)-1) {
+		if !isStorageUnlimited {
+			return ErrSegmentFull
+		}
+
+		// if storage mode can use unlimited size, just automatically expands the buffers
+		seg.bufs = append(seg.bufs, NewBuffer(seg.getCurBuffer().size))
+	}
+
+	seg.curBlock += 1
+	return nil
+}
+
+func (seg *segment) set(key []byte, value interface{}, hashVal uint64, expireSeconds int, isStorage, isStorageUnlimited bool, fn HeyiCacheFnIfc) error {
 	// check large key
 	if len(key) > 65535 {
 		return ErrLargeKey
 	}
 
+	valueSize := fn.Size(value, true)
 	// check large key + value
 	maxKeyValLen := int(seg.getCurBuffer().size - ENTRY_HDR_SIZE)
 	if len(key)+int(valueSize) > maxKeyValLen {
@@ -148,6 +166,11 @@ func (seg *segment) set(key []byte, value interface{}, valueSize int32, hashVal 
 	slot := seg.getSlot(slotId)
 	idx, match := seg.lookup(slot, hash16, key)
 	if match {
+		// storage mode, we do not allow duplicate write
+		if isStorage {
+			return ErrStorageDupWrite
+		}
+
 		skip := false
 		if seg.minWriteInterval > 0 {
 			ptr := &slot[idx]
@@ -172,28 +195,31 @@ func (seg *segment) set(key []byte, value interface{}, valueSize int32, hashVal 
 	// check buffer size
 	entryLen := ENTRY_HDR_SIZE + int64(len(key)) + int64(valueSize)
 	if !seg.enough(entryLen) {
-		if isStorage {
-			// storage mode won't evict data
-			return ErrSegmentFull
-		}
+		if !isStorage {
+			// trigger eviction if no enough space
+			seg.isEviction = true
+			// not enough space in segment, return error.
+			// the caller should try to allocate a new segment.
+			err := seg.eviction()
+			if err != nil {
+				return err
+			}
 
-		// trigger eviction if no enough space
-		seg.isEviction = true
-		// not enough space in segment, return error.
-		// the caller should try to allocate a new segment.
-		err := seg.eviction()
-		if err != nil {
-			return err
-		}
+			if !seg.enough(entryLen) {
+				// still not enough space, return error.
+				return ErrValueTooBig
+			}
 
-		if !seg.enough(entryLen) {
-			// still not enough space, return error.
-			return ErrValueTooBig
+			// every time we expand the slot, we need to re-check the key
+			slot = seg.getSlot(slotId)
+			idx, _ = seg.lookup(slot, hash16, key)
+		} else {
+			err := seg.expandMemory(isStorageUnlimited)
+			if err != nil {
+				return err
+			}
+			// no need to re-check the buffer, because a new buffer must have enough space, if not, it will return ErrLargeEntry before
 		}
-
-		// every time we expand the segment, we need to re-check the key
-		slot = seg.getSlot(slotId)
-		idx, _ = seg.lookup(slot, hash16, key)
 	}
 
 	// prepare expire
@@ -207,7 +233,7 @@ func (seg *segment) set(key []byte, value interface{}, valueSize int32, hashVal 
 	offset := buf.index
 	bs := buf.Alloc(entryLen)
 	// if the cache size higher than the eviction size, set the isEviction flag
-	if buf.index > seg.evictionSize {
+	if buf.index > seg.evictionSize && !isStorage {
 		seg.isEviction = true
 	}
 	// 1. write entry header
@@ -337,7 +363,7 @@ func (seg *segment) lookupByOff(slot []entryPtr, hash16 uint16, offset int64) (i
 	return idx, match
 }
 
-func (seg *segment) expand() {
+func (seg *segment) expandSlot() {
 	newSlotData := make([]entryPtr, seg.slotCap*2*slotCount)
 	for i := 0; i < int(slotCount); i++ {
 		off := int32(i) * seg.slotCap
@@ -349,7 +375,7 @@ func (seg *segment) expand() {
 
 func (seg *segment) insertEntryPtr(slotId uint8, hash16 uint16, offset int64, idx int, keyLen uint16) {
 	if seg.slotsLen[slotId] == seg.slotCap {
-		seg.expand()
+		seg.expandSlot()
 	}
 	seg.slotsLen[slotId]++
 	seg.entryCount += 1

@@ -13,7 +13,7 @@ const (
 	segCount                     int32 = 256
 	segAndOpVal                        = 255
 	slotCount                    int32 = 256
-	blockCount                   int32 = 10 // must >= 2
+	blockCount                   int32 = 10 // cache mode always use 10 blocks, storage mode start from 10 but allowed use more
 	minSize                      int64 = 32
 	unitMB                       int64 = 1024 * 1024
 	defaultEvictionTriggerTiming       = 0.5 // 50%
@@ -21,10 +21,11 @@ const (
 
 // cache instance, refer to freecache but do more performance optimizations based on arena memory
 type Cache struct {
-	Name      string
-	IsStorage bool // true means this cache is used for storage, false means this cache is used for memory cache
-	locks     [segCount]sync.Mutex
-	segments  [segCount]segment
+	Name               string
+	IsStorage          bool // true means this cache is used for storage, false means this cache is used for memory cache
+	IsStorageUnlimited bool // true means storage mode can use unlimited size, false means storage mode will use the MaxSize as limit
+	locks              [segCount]sync.Mutex
+	segments           [segCount]segment
 }
 
 func hashFunc(data []byte) uint64 {
@@ -53,8 +54,9 @@ func NewCache(config Config) (*Cache, error) {
 	}
 
 	cache := &Cache{
-		Name:      config.Name,
-		IsStorage: config.IsStorage,
+		Name:               config.Name,
+		IsStorage:          config.IsStorage,
+		IsStorageUnlimited: config.IsStorageUnlimited,
 	}
 
 	for i := 0; i < int(segCount); i++ {
@@ -94,11 +96,9 @@ func (cache *Cache) Close() {
 func (cache *Cache) Set(key []byte, value interface{}, fn HeyiCacheFnIfc, expireSeconds int) error {
 	hashVal := hashFunc(key)
 	segID := hashVal & segAndOpVal
-	valueSize := fn.Size(value, true)
 
-	// create hdr and buffer to write
 	cache.locks[segID].Lock()
-	err := cache.segments[segID].set(key, value, valueSize, hashVal, expireSeconds, cache.IsStorage, fn)
+	err := cache.segments[segID].set(key, value, hashVal, expireSeconds, cache.IsStorage, cache.IsStorageUnlimited, fn)
 	cache.locks[segID].Unlock()
 
 	return err
@@ -112,6 +112,7 @@ func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{
 
 	hashVal := hashFunc(key)
 	segID := hashVal & segAndOpVal
+
 	cache.locks[segID].Lock()
 	segment := &cache.segments[segID]
 	value, err := segment.get(key, fn, hashVal)
@@ -121,15 +122,18 @@ func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{
 		atomic.AddInt32(&lease.keeps[segID][segment.curBlock], 1) // use atomic to avoid the lease being modified by other goroutines
 	}
 	cache.locks[segID].Unlock()
+
 	return value, err
 }
 
 // Del deletes an item in the cache by key and returns true or false if a delete occurred.
-func (cache *Cache) Del(key []byte) (affected bool) {
+func (cache *Cache) Del(key []byte) bool {
 	hashVal := hashFunc(key)
 	segID := hashVal & segAndOpVal
+
 	cache.locks[segID].Lock()
-	affected = cache.segments[segID].del(key, hashVal)
+	affected := cache.segments[segID].del(key, hashVal)
 	cache.locks[segID].Unlock()
-	return
+
+	return affected
 }
