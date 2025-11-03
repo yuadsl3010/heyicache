@@ -25,8 +25,7 @@ func newKeepsPool() *sync.Pool {
 }
 
 type LeaseCtx struct {
-	leases map[string]*Lease
-	mutex  sync.Mutex
+	leases sync.Map // map[string]*Lease
 }
 
 type Lease struct {
@@ -35,9 +34,7 @@ type Lease struct {
 }
 
 func NewLeaseCtx(ctx context.Context) context.Context {
-	return context.WithValue(ctx, leaseCtxKey, &LeaseCtx{
-		leases: make(map[string]*Lease),
-	})
+	return context.WithValue(ctx, leaseCtxKey, &LeaseCtx{})
 }
 
 func GetLeaseCtx(ctx context.Context) *LeaseCtx {
@@ -59,15 +56,26 @@ func (leaseCtx *LeaseCtx) GetLease(cache *Cache) *Lease {
 		return nil
 	}
 
-	leaseCtx.mutex.Lock()
-	defer leaseCtx.mutex.Unlock()
-	if _, ok := leaseCtx.leases[cache.Name]; !ok {
-		leaseCtx.leases[cache.Name] = &Lease{
-			cache: cache,
-			keeps: keepsPool.Get().(*typeLease),
-		}
+	// 先尝试读取，避免不必要的写操作
+	if value, ok := leaseCtx.leases.Load(cache.Name); ok {
+		return value.(*Lease)
 	}
-	return leaseCtx.leases[cache.Name]
+
+	// 使用 LoadOrStore 保证原子性，避免重复创建
+	newLease := &Lease{
+		cache: cache,
+		keeps: keepsPool.Get().(*typeLease),
+	}
+
+	actual, _ := leaseCtx.leases.LoadOrStore(cache.Name, newLease)
+	lease := actual.(*Lease)
+
+	// 如果 LoadOrStore 返回了已存在的值，需要归还新创建的 keeps
+	if lease != newLease {
+		keepsPool.Put(newLease.keeps)
+	}
+
+	return lease
 }
 
 // concurrently unsafe because it should be called only once when the context is done
@@ -76,9 +84,10 @@ func (leaseCtx *LeaseCtx) Done() {
 		return
 	}
 
-	for _, lease := range leaseCtx.leases {
-		if lease == nil || lease.cache.IsStorage {
-			continue
+	leaseCtx.leases.Range(func(key, value interface{}) bool {
+		lease := value.(*Lease)
+		if lease == nil {
+			return true // continue iteration
 		}
 		for segID, vs := range *(lease.keeps) {
 			for block, k := range vs {
@@ -99,5 +108,6 @@ func (leaseCtx *LeaseCtx) Done() {
 		*lease.keeps = keepsNew
 		keepsPool.Put(lease.keeps)
 		lease.keeps = nil
-	}
+		return true // continue iteration
+	})
 }

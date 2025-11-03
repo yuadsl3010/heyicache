@@ -106,7 +106,7 @@ func (cache *Cache) Set(key []byte, value interface{}, fn HeyiCacheFnIfc, expire
 
 // Drop the Peek() method, it could be replace by Storage mode if you don't want any data expire or eviction
 func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
-	if lease == nil && !cache.IsStorage {
+	if lease == nil {
 		return nil, ErrNilLeaseCtx
 	}
 
