@@ -119,7 +119,9 @@ func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{
 	if err == nil && !cache.IsStorage {
 		// later need to return the lease to keep the used = 0
 		segment.bufs[segment.curBlock].used += 1
-		atomic.AddInt32(&lease.keeps[segID][segment.curBlock], 1) // use atomic to avoid the lease being modified by other goroutines
+		// why segment.curBlock%blockCount instead of just segment.curBlock?
+		// because in storage mode, the segment.curBlock may be greater than blockCount
+		atomic.AddInt32(&lease.keeps[segID][segment.curBlock%blockCount], 1) // use atomic to avoid the lease being modified by other goroutines
 	}
 	cache.locks[segID].Unlock()
 
