@@ -26,6 +26,7 @@ func newKeepsPool() *sync.Pool {
 
 type LeaseCtx struct {
 	leases map[string]*Lease
+	mutex  sync.Mutex
 }
 
 type Lease struct {
@@ -52,10 +53,14 @@ func GetLeaseCtx(ctx context.Context) *LeaseCtx {
 	return leaseCtx
 }
 
+// concurrently safe
 func (leaseCtx *LeaseCtx) GetLease(cache *Cache) *Lease {
 	if leaseCtx == nil || cache == nil {
 		return nil
 	}
+
+	leaseCtx.mutex.Lock()
+	defer leaseCtx.mutex.Unlock()
 	if _, ok := leaseCtx.leases[cache.Name]; !ok {
 		leaseCtx.leases[cache.Name] = &Lease{
 			cache: cache,
@@ -65,6 +70,7 @@ func (leaseCtx *LeaseCtx) GetLease(cache *Cache) *Lease {
 	return leaseCtx.leases[cache.Name]
 }
 
+// concurrently unsafe because it should be called only once when the context is done
 func (leaseCtx *LeaseCtx) Done() {
 	if leaseCtx == nil {
 		return
