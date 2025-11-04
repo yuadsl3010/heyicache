@@ -106,7 +106,7 @@ func (cache *Cache) Set(key []byte, value interface{}, fn HeyiCacheFnIfc, expire
 
 // Drop the Peek() method, it could be replace by Storage mode if you don't want any data expire or eviction
 func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
-	if lease == nil && !cache.IsStorage {
+	if lease == nil {
 		return nil, ErrNilLeaseCtx
 	}
 
@@ -116,10 +116,13 @@ func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{
 	cache.locks[segID].Lock()
 	segment := &cache.segments[segID]
 	value, err := segment.get(key, fn, hashVal)
-	if err == nil && !cache.IsStorage {
+	if err == nil {
+		// why segment.curBlock%blockCount instead of just segment.curBlock?
+		// because in storage mode, the segment.curBlock may be greater than blockCount
+		blockID := segment.curBlock % blockCount
 		// later need to return the lease to keep the used = 0
-		segment.bufs[segment.curBlock].used += 1
-		atomic.AddInt32(&lease.keeps[segID][segment.curBlock], 1) // use atomic to avoid the lease being modified by other goroutines
+		segment.bufs[blockID].used += 1
+		atomic.AddInt32(&lease.keeps[segID][blockID], 1) // use atomic to avoid the lease being modified by other goroutines
 	}
 	cache.locks[segID].Unlock()
 
