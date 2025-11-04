@@ -321,8 +321,7 @@ func entryPtrIdx(slot []entryPtr, hash16 uint16) int {
 	high := len(slot)
 	for idx < high {
 		mid := (idx + high) >> 1
-		oldEntry := &slot[mid]
-		if oldEntry.hash16 < hash16 {
+		if slot[mid].hash16 < hash16 {
 			idx = mid + 1
 		} else {
 			high = mid
