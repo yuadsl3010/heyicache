@@ -6,7 +6,7 @@ const HASH_ENTRY_SIZE = 16
 const ENTRY_HDR_SIZE int64 = 24
 
 var ErrLargeKey = errors.New("The key is larger than 65535")
-var ErrLargeEntry = errors.New("The entry size is larger than 1/1024 of cache size")
+var ErrLargeEntry = errors.New("The entry size is larger than 1/2560 of cache size (1/256 for storage mode)")
 var ErrNotFound = errors.New("Entry not found")
 
 type entryPtr struct {
