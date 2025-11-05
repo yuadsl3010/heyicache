@@ -333,12 +333,14 @@ func entryPtrIdx(slot []entryPtr, hash16 uint16) int {
 func (seg *segment) lookup(slot []entryPtr, hash16 uint16, key []byte) (int, bool) {
 	match := false
 	idx := entryPtrIdx(slot, hash16)
-	for idx < len(slot) {
+	keyLen := uint16(len(key))
+	slotLen := len(slot)
+	for idx < slotLen {
 		ptr := &slot[idx]
 		if ptr.hash16 != hash16 {
 			break
 		}
-		match = int(ptr.keyLen) == len(key) && seg.getBuffer(ptr).EqualAt(key, ptr.offset+ENTRY_HDR_SIZE)
+		match = (ptr.keyLen == keyLen) && seg.getBuffer(ptr).EqualAt(key, ptr.offset+ENTRY_HDR_SIZE)
 		if match {
 			return idx, match
 		}
