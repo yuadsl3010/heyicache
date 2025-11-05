@@ -104,6 +104,9 @@ func (cache *Cache) Set(key []byte, value interface{}, fn HeyiCacheFnIfc, expire
 
 	cache.locks[segID].Lock()
 	err := cache.segments[segID].set(key, value, hashVal, expireSeconds, cache.IsStorage, cache.IsStorageUnlimited, fn)
+	if err != nil {
+		cache.segments[segID].writeErrCount += 1
+	}
 	cache.locks[segID].Unlock()
 
 	return err
