@@ -40,11 +40,12 @@ type segment struct {
 	slotCap           int32 // max number of entry pointers a slot can hold.
 	evictionSize      int64
 	slotsLen          [slotCount]int32 // the length for every slot
+	slotOffsets       [slotCount]int32 // 预计算的slot偏移量
 	slotsData         []entryPtr
 }
 
-func newSegment(bufSize int64, segId int32, evictionTriggerTiming float32, minWriteInterval int32, timer Timer) segment {
-	everyBufSize := bufSize / int64(blockCount)
+func newSegment(bufSize int64, segId int32, evictionTriggerTiming float32, minWriteInterval int32, timer Timer, block int32) segment {
+	everyBufSize := bufSize / int64(block)
 	seg := segment{
 		bufs:             []*buffer{},
 		segId:            segId,
@@ -57,10 +58,11 @@ func newSegment(bufSize int64, segId int32, evictionTriggerTiming float32, minWr
 		evictionSize:     int64(float64(everyBufSize) * float64(evictionTriggerTiming)),
 	}
 
-	for i := 0; i < int(blockCount); i++ {
+	for i := 0; i < int(block); i++ {
 		seg.bufs = append(seg.bufs, NewBuffer(everyBufSize))
 	}
 
+	seg.updateSlotOffsets()
 	return seg
 }
 
@@ -319,8 +321,7 @@ func entryPtrIdx(slot []entryPtr, hash16 uint16) int {
 	high := len(slot)
 	for idx < high {
 		mid := (idx + high) >> 1
-		oldEntry := &slot[mid]
-		if oldEntry.hash16 < hash16 {
+		if slot[mid].hash16 < hash16 {
 			idx = mid + 1
 		} else {
 			high = mid
@@ -332,12 +333,14 @@ func entryPtrIdx(slot []entryPtr, hash16 uint16) int {
 func (seg *segment) lookup(slot []entryPtr, hash16 uint16, key []byte) (int, bool) {
 	match := false
 	idx := entryPtrIdx(slot, hash16)
-	for idx < len(slot) {
+	keyLen := uint16(len(key))
+	slotLen := len(slot)
+	for idx < slotLen {
 		ptr := &slot[idx]
 		if ptr.hash16 != hash16 {
 			break
 		}
-		match = int(ptr.keyLen) == len(key) && seg.getBuffer(ptr).EqualAt(key, ptr.offset+ENTRY_HDR_SIZE)
+		match = (ptr.keyLen == keyLen) && seg.getBuffer(ptr).EqualAt(key, ptr.offset+ENTRY_HDR_SIZE)
 		if match {
 			return idx, match
 		}
@@ -363,6 +366,13 @@ func (seg *segment) lookupByOff(slot []entryPtr, hash16 uint16, offset int64) (i
 	return idx, match
 }
 
+func (seg *segment) updateSlotOffsets() {
+	// 更新预计算的偏移量
+	for i := 0; i < int(slotCount); i++ {
+		seg.slotOffsets[i] = int32(i) * seg.slotCap
+	}
+}
+
 func (seg *segment) expandSlot() {
 	newSlotData := make([]entryPtr, seg.slotCap*2*slotCount)
 	for i := 0; i < int(slotCount); i++ {
@@ -371,6 +381,7 @@ func (seg *segment) expandSlot() {
 	}
 	seg.slotCap *= 2
 	seg.slotsData = newSlotData
+	seg.updateSlotOffsets()
 }
 
 func (seg *segment) insertEntryPtr(slotId uint8, hash16 uint16, offset int64, idx int, keyLen uint16) {
@@ -406,7 +417,7 @@ func (seg *segment) delEntryPtr(slotId uint8, slot []entryPtr, idx int) {
 }
 
 func (seg *segment) getSlot(slotId uint8) []entryPtr {
-	slotOff := int32(slotId) * seg.slotCap
+	slotOff := seg.slotOffsets[slotId]
 	return seg.slotsData[slotOff : slotOff+seg.slotsLen[slotId] : slotOff+seg.slotCap]
 }
 

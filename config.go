@@ -23,12 +23,12 @@ type Config struct {
 
 	// true means this cache is used for storage (all data will be kept until the cache is closed), storage mode has some features like:
 	// 1. never evict the data, no matter the cache if full or data is expired
-	// 2. no need to pass LeaseCtx
 	// default is false, means this cache is used for memory cache, data will be evicted when the cache is full or data is expired
 	IsStorage bool
 
 	// true means storage mode can use unlimited size
 	// default is false, which means storage mode will use the MaxSize as limit
+	// when is full it will increase memory: 1 / 256 * MaxSize
 	IsStorageUnlimited bool
 
 	// Custom timer
