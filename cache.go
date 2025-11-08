@@ -22,9 +22,10 @@ const (
 
 // cache instance, refer to freecache but do more performance optimizations based on arena memory
 type Cache struct {
-	Name               string
-	IsStorage          bool // true means this cache is used for storage, false means this cache is used for memory cache
-	IsStorageUnlimited bool // true means storage mode can use unlimited size, false means storage mode will use the MaxSize as limit
+	name               string
+	isStorage          bool // true means this cache is used for storage, false means this cache is used for memory cache
+	isStorageUnlimited bool // true means storage mode can use unlimited size, false means storage mode will use the MaxSize as limit
+	versionStorage     uint32
 	locks              [segCount]sync.Mutex
 	segments           [segCount]segment
 }
@@ -54,10 +55,15 @@ func NewCache(config Config) (*Cache, error) {
 		config.EvictionTriggerTiming = defaultEvictionTriggerTiming
 	}
 
+	if config.IsStorage && config.VersionStorage == 0 {
+		return nil, fmt.Errorf("VersionStorage must be greater than 0 when IsStorage is true")
+	}
+
 	cache := &Cache{
-		Name:               config.Name,
-		IsStorage:          config.IsStorage,
-		IsStorageUnlimited: config.IsStorageUnlimited,
+		name:               config.Name,
+		isStorage:          config.IsStorage,
+		isStorageUnlimited: config.IsStorageUnlimited,
+		versionStorage:     config.VersionStorage,
 	}
 
 	block := blockCount
@@ -69,6 +75,19 @@ func NewCache(config Config) (*Cache, error) {
 	}
 
 	return cache, nil
+}
+
+func (cache *Cache) Name() string {
+	if !cache.isStorage {
+		return cache.name
+	}
+
+	return fmt.Sprintf("%v@%v", cache.name, cache.versionStorage)
+}
+
+// useful when you want to create a new storage cache and ignore all old data
+func (cache *Cache) NextVersion() uint32 {
+	return cache.versionStorage + 1
 }
 
 // once call Close(), cache should NOT be used anymore, just wait for the other goroutines to finish their work and recycle the memory
@@ -103,7 +122,7 @@ func (cache *Cache) Set(key []byte, value interface{}, fn HeyiCacheFnIfc, expire
 	segID := hashVal & segAndOpVal
 
 	cache.locks[segID].Lock()
-	err := cache.segments[segID].set(key, value, hashVal, expireSeconds, cache.IsStorage, cache.IsStorageUnlimited, fn)
+	err := cache.segments[segID].set(key, value, hashVal, expireSeconds, cache.isStorage, cache.isStorageUnlimited, fn)
 	if err != nil {
 		cache.segments[segID].writeErrCount += 1
 	}
