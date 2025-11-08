@@ -22,7 +22,7 @@ const (
 
 // cache instance, refer to freecache but do more performance optimizations based on arena memory
 type Cache struct {
-	name               string
+	Name               string
 	isStorage          bool // true means this cache is used for storage, false means this cache is used for memory cache
 	isStorageUnlimited bool // true means storage mode can use unlimited size, false means storage mode will use the MaxSize as limit
 	versionStorage     uint32
@@ -60,7 +60,7 @@ func NewCache(config Config) (*Cache, error) {
 	}
 
 	cache := &Cache{
-		name:               config.Name,
+		Name:               config.Name,
 		isStorage:          config.IsStorage,
 		isStorageUnlimited: config.IsStorageUnlimited,
 		versionStorage:     config.VersionStorage,
@@ -77,12 +77,12 @@ func NewCache(config Config) (*Cache, error) {
 	return cache, nil
 }
 
-func (cache *Cache) Name() string {
+func (cache *Cache) getName() string {
 	if !cache.isStorage {
-		return cache.name
+		return cache.Name
 	}
 
-	return fmt.Sprintf("%v@%v", cache.name, cache.versionStorage)
+	return fmt.Sprintf("%v@%v", cache.Name, cache.versionStorage)
 }
 
 // useful when you want to create a new storage cache and ignore all old data

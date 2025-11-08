@@ -57,7 +57,7 @@ func (leaseCtx *LeaseCtx) GetLease(cache *Cache) *Lease {
 	}
 
 	// 先尝试读取，避免不必要的写操作
-	name := cache.Name()
+	name := cache.getName()
 	if value, ok := leaseCtx.leases.Load(name); ok {
 		return value.(*Lease)
 	}
