@@ -87,6 +87,9 @@ func (cache *Cache) Name() string {
 
 // useful when you want to create a new storage cache and ignore all old data
 func (cache *Cache) NextVersion() uint32 {
+	if cache == nil {
+		return 1
+	}
 	return cache.versionStorage + 1
 }
 
