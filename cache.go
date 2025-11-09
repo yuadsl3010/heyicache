@@ -23,6 +23,7 @@ const (
 // cache instance, refer to freecache but do more performance optimizations based on arena memory
 type Cache struct {
 	Name               string
+	leaseName          string
 	isStorage          bool // true means this cache is used for storage, false means this cache is used for memory cache
 	isStorageUnlimited bool // true means storage mode can use unlimited size, false means storage mode will use the MaxSize as limit
 	versionStorage     uint32
@@ -61,6 +62,7 @@ func NewCache(config Config) (*Cache, error) {
 
 	cache := &Cache{
 		Name:               config.Name,
+		leaseName:          config.Name,
 		isStorage:          config.IsStorage,
 		isStorageUnlimited: config.IsStorageUnlimited,
 		versionStorage:     config.VersionStorage,
@@ -69,20 +71,14 @@ func NewCache(config Config) (*Cache, error) {
 	block := blockCount
 	if config.IsStorage {
 		block = blockStorageCount
+		cache.leaseName = fmt.Sprintf("%v@%v", cache.Name, cache.versionStorage)
 	}
+
 	for i := 0; i < int(segCount); i++ {
 		cache.segments[i] = newSegment(config.MaxSize*unitMB/int64(segCount), int32(i), config.EvictionTriggerTiming, config.MinWriteInterval, config.CustomTimer, block)
 	}
 
 	return cache, nil
-}
-
-func (cache *Cache) getName() string {
-	if !cache.isStorage {
-		return cache.Name
-	}
-
-	return fmt.Sprintf("%v@%v", cache.Name, cache.versionStorage)
 }
 
 // useful when you want to create a new storage cache and ignore all old data
@@ -93,12 +89,15 @@ func (cache *Cache) NextVersion() uint32 {
 	return cache.versionStorage + 1
 }
 
-// once call Close(), cache should NOT be used anymore, just wait for the other goroutines to finish their work and recycle the memory
-func (cache *Cache) Close() {
+// normally you don't need to close cache manually, becuase when you set your cache pointer to nil, this cache memory will be released by GC
+// but if you want to release all memory immediately, you can call this method to close the cache
+// after {d} duration calling this method, this cache memory will be released
+// only storage mode will need this feature, because it should be an other goroutine update storage daily or hourly, by create a new cache instance, load datas, and switch the requests to new cache
+func (cache *Cache) AsyncCloseAfter(d time.Duration) {
 	go func() {
 		readyForClose := false
 		for !readyForClose {
-			time.Sleep(time.Second)
+			time.Sleep(d)
 			readyForClose = true
 			for i := 0; i < int(segCount); i++ {
 				cache.locks[i].Lock()
@@ -134,17 +133,18 @@ func (cache *Cache) Set(key []byte, value interface{}, fn HeyiCacheFnIfc, expire
 	return err
 }
 
+// Actually Get() use lease.Cache instead of cache directly, in some high concurrency scenarios, lease.Cache is old but cache is new when you switch cache instance for storage mode at runtime
 // Drop the Peek() method, it could be replace by Storage mode if you don't want any data expire or eviction
 func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
-	if lease == nil {
+	if lease == nil || lease.cache == nil {
 		return nil, ErrNilLeaseCtx
 	}
 
 	hashVal := hashFunc(key)
 	segID := hashVal & segAndOpVal
 
-	cache.locks[segID].Lock()
-	segment := &cache.segments[segID]
+	lease.cache.locks[segID].Lock()
+	segment := &lease.cache.segments[segID]
 	value, err := segment.get(key, fn, hashVal)
 	if err == nil {
 		// why segment.curBlock%blockCount instead of just segment.curBlock?
@@ -154,7 +154,7 @@ func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{
 		segment.bufs[blockID].used += 1
 		atomic.AddInt32(&lease.keeps[segID][blockID], 1) // use atomic to avoid the lease being modified by other goroutines
 	}
-	cache.locks[segID].Unlock()
+	lease.cache.locks[segID].Unlock()
 
 	return value, err
 }
