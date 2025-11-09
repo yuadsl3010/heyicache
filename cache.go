@@ -2,6 +2,7 @@ package heyicache
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -116,6 +117,7 @@ func (cache *Cache) AsyncCloseAfter(d time.Duration) {
 			cache.segments[i].slotsData = nil
 			cache.locks[i].Unlock()
 		}
+		runtime.GC()
 	}()
 }
 
