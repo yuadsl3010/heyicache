@@ -26,6 +26,11 @@ type Config struct {
 	// default is false, means this cache is used for memory cache, data will be evicted when the cache is full or data is expired
 	IsStorage bool
 
+	// if IsStorage is true, VersionStorage is used to identify different versions of storage data
+	// like when you want to new a storage cache and ignore all old data, you can set a new VersionStorage
+	// it must be greater than 0 when IsStorage is true, or will get an error
+	VersionStorage uint32
+
 	// true means storage mode can use unlimited size
 	// default is false, which means storage mode will use the MaxSize as limit
 	// when is full it will increase memory: 1 / 256 * MaxSize

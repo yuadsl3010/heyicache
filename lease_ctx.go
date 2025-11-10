@@ -57,7 +57,7 @@ func (leaseCtx *LeaseCtx) GetLease(cache *Cache) *Lease {
 	}
 
 	// 先尝试读取，避免不必要的写操作
-	if value, ok := leaseCtx.leases.Load(cache.Name); ok {
+	if value, ok := leaseCtx.leases.Load(cache.leaseName); ok {
 		return value.(*Lease)
 	}
 
@@ -67,7 +67,7 @@ func (leaseCtx *LeaseCtx) GetLease(cache *Cache) *Lease {
 		keeps: keepsPool.Get().(*typeLease),
 	}
 
-	actual, _ := leaseCtx.leases.LoadOrStore(cache.Name, newLease)
+	actual, _ := leaseCtx.leases.LoadOrStore(cache.leaseName, newLease)
 	lease := actual.(*Lease)
 
 	// 如果 LoadOrStore 返回了已存在的值，需要归还新创建的 keeps
