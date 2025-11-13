@@ -57,13 +57,13 @@ func genCacheFn(obj interface{}, isMainPkgStruct bool) {
 	}
 
 	// ANSI color codes: \033[1;31m = bold red, \033[1;33m = bold yellow, \033[0m = reset
-	fmt.Println("\n" +
-		"\033[1;33m╔═══════════════════════════════════════════════════════════════════╗\033[0m\n" +
-		"\033[1;33m║\033[0m\033[1;31m                         ⚠️  IMPORTANT  ⚠️                           \033[0m\033[1;33m║\033[0m\n" +
-		"\033[1;33m╠═══════════════════════════════════════════════════════════════════╣\033[0m\n" +
-		"\033[1;33m║\033[0m  \033[1;36mPlease search for \"\033[1;31m[HeyiCacheWarn]\033[1;36m\" in the generated files\033[0m       \033[1;33m║\033[0m\n" +
-		"\033[1;33m║\033[0m  \033[1;36mand carefully review ALL warning messages before using!\033[0m          \033[1;33m║\033[0m\n" +
-		"\033[1;33m╚═══════════════════════════════════════════════════════════════════╝\033[0m\n")
+	fmt.Printf("\n"+
+		"\033[1;33m╔═══════════════════════════════════════════════════════════════════╗\033[0m\n"+
+		"\033[1;33m║\033[0m\033[1;31m                         ⚠️  IMPORTANT  ⚠️                           \033[0m\033[1;33m║\033[0m\n"+
+		"\033[1;33m╠═══════════════════════════════════════════════════════════════════╣\033[0m\n"+
+		"\033[1;33m║\033[0m  \033[1;36mPlease search for \"\033[1;31m%s\033[1;36m\" in the generated files\033[0m       \033[1;33m║\033[0m\n"+
+		"\033[1;33m║\033[0m  \033[1;36mand carefully review ALL warning messages before using!\033[0m          \033[1;33m║\033[0m\n"+
+		"\033[1;33m╚═══════════════════════════════════════════════════════════════════╝\033[0m\n", strings.TrimSpace(warn))
 }
 
 func xxx_genCacheFn(t reflect.Type, callerPkg string, callerPkgName string, isMainPkgStruct bool, subPkgs []string) {
