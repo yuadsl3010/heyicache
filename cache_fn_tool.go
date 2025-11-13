@@ -17,6 +17,7 @@ var (
 	funcGet         = prefix + "Get"
 	funcSize        = prefix + "Size"
 	funcSet         = prefix + "Set"
+	warn            = "[HeyiCacheWarn] "
 )
 
 func GenCacheFn(obj interface{}) {
@@ -54,6 +55,15 @@ func genCacheFn(obj interface{}, isMainPkgStruct bool) {
 	for _, info := range typeInfos {
 		xxx_genCacheFn(info.T, callerPkg, callerPkgName, isMainPkgStruct, info.GetPkgs())
 	}
+
+	// ANSI color codes: \033[1;31m = bold red, \033[1;33m = bold yellow, \033[0m = reset
+	fmt.Println("\n" +
+		"\033[1;33m╔═══════════════════════════════════════════════════════════════════╗\033[0m\n" +
+		"\033[1;33m║\033[0m\033[1;31m                         ⚠️  IMPORTANT  ⚠️                           \033[0m\033[1;33m║\033[0m\n" +
+		"\033[1;33m╠═══════════════════════════════════════════════════════════════════╣\033[0m\n" +
+		"\033[1;33m║\033[0m  \033[1;36mPlease search for \"\033[1;31m[HeyiCacheWarn]\033[1;36m\" in the generated files\033[0m       \033[1;33m║\033[0m\n" +
+		"\033[1;33m║\033[0m  \033[1;36mand carefully review ALL warning messages before using!\033[0m          \033[1;33m║\033[0m\n" +
+		"\033[1;33m╚═══════════════════════════════════════════════════════════════════╝\033[0m\n")
 }
 
 func xxx_genCacheFn(t reflect.Type, callerPkg string, callerPkgName string, isMainPkgStruct bool, subPkgs []string) {
@@ -707,17 +717,17 @@ func (ft *FieldTool) Check() string {
 
 	switch ft.Category {
 	case FieldTypeNotStructPtr:
-		status = "error! pointer type must point to struct"
+		status = fmt.Sprintf("%serror! pointer type must point to struct", warn)
 	case FieldTypeMap:
-		status = "skip and set nil! map type not supported cause it can't be stored by value, you must use custom serlization to store it if you really want map"
+		status = fmt.Sprintf("%sskip and set nil! map type not supported cause it can't be stored by value, you must use custom serlization to store it if you really want map", warn)
 	}
 
 	if ft.IsSkip {
-		status = "skip and set nil! struct tag skip"
+		status = fmt.Sprintf("%sskip and set nil! struct tag skip", warn)
 	}
 
 	if !ft.IsExported {
-		status = "not exported, it can't be used after get from cache"
+		status = fmt.Sprintf("%snot exported, it can't be used after get from cache", warn)
 	}
 
 	return fmt.Sprintf("// %v: %v", ft.Name, status)
