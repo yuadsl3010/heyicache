@@ -39,7 +39,7 @@ func genCacheFn(obj interface{}, isMainPkgStruct bool) {
 	// caller package name
 	callerPkg := ""
 	callerPkgName := ""
-	pc, _, _, ok := runtime.Caller(1)
+	pc, _, _, ok := runtime.Caller(2)
 	if ok {
 		fn := runtime.FuncForPC(pc)
 		if fn != nil {
