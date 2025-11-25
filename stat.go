@@ -18,6 +18,7 @@ type Stat struct {
 	MemSize           int64   // total size of all segments in the cache
 	OverwriteCount    int64   // number of times entries have been overriden
 	SkipWriteCount    int64   // number of times a write was skipped due to MinWriteInterval
+	BufCount          int64   // number of buffers in the cache
 }
 
 // statistics
@@ -38,6 +39,7 @@ func (cache *Cache) GetAndResetStat() *Stat {
 		stat.WriteErrCount += seg.writeErrCount
 		stat.OverwriteCount += seg.overwriteCount
 		stat.SkipWriteCount += seg.skipWriteCount
+		stat.BufCount += int64(len(seg.bufs))
 		for _, buf := range seg.bufs {
 			stat.MemUsed += buf.index
 			stat.MemSize += buf.size
