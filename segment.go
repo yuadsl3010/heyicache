@@ -44,8 +44,8 @@ type segment struct {
 	slotsData         []entryPtr
 }
 
-func newSegment(bufSize int64, segId int32, evictionTriggerTiming float32, minWriteInterval int32, timer Timer, block int32) segment {
-	everyBufSize := bufSize / int64(block)
+func newSegment(bufSize int64, segId int32, evictionTriggerTiming float32, minWriteInterval int32, timer Timer) segment {
+	everyBufSize := bufSize / int64(blockCount)
 	seg := segment{
 		bufs:             []*buffer{},
 		segId:            segId,
@@ -58,7 +58,7 @@ func newSegment(bufSize int64, segId int32, evictionTriggerTiming float32, minWr
 		evictionSize:     int64(float64(everyBufSize) * float64(evictionTriggerTiming)),
 	}
 
-	for i := 0; i < int(block); i++ {
+	for i := 0; i < int(blockCount); i++ {
 		seg.bufs = append(seg.bufs, NewBuffer(everyBufSize))
 	}
 
