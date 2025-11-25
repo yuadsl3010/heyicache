@@ -15,7 +15,6 @@ const (
 	segAndOpVal                        = 255
 	slotCount                    int32 = 256
 	blockCount                   int32 = 10 // cache mode always use 10 blocks
-	blockStorageCount            int32 = 1  // storage mode has only 1 block, it can be expanded when storage is unlimited
 	minSize                      int64 = 32
 	unitMB                       int64 = 1024 * 1024
 	defaultEvictionTriggerTiming       = 0.5 // 50%
@@ -69,14 +68,12 @@ func NewCache(config Config) (*Cache, error) {
 		versionStorage:     config.VersionStorage,
 	}
 
-	block := blockCount
 	if config.IsStorage {
-		block = blockStorageCount
 		cache.leaseName = fmt.Sprintf("%v@%v", cache.Name, cache.versionStorage)
 	}
 
 	for i := 0; i < int(segCount); i++ {
-		cache.segments[i] = newSegment(config.MaxSize*unitMB/int64(segCount), int32(i), config.EvictionTriggerTiming, config.MinWriteInterval, config.CustomTimer, block)
+		cache.segments[i] = newSegment(config.MaxSize*unitMB/int64(segCount), int32(i), config.EvictionTriggerTiming, config.MinWriteInterval, config.CustomTimer)
 	}
 
 	return cache, nil
