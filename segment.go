@@ -2,6 +2,7 @@ package heyicache
 
 import (
 	"errors"
+	"fmt"
 	"time"
 	"unsafe"
 )
@@ -159,7 +160,7 @@ func (seg *segment) set(key []byte, value interface{}, hashVal uint64, expireSec
 	maxKeyValLen := int(seg.getCurBuffer().size - ENTRY_HDR_SIZE)
 	if len(key)+int(valueSize) > maxKeyValLen {
 		// Do not accept large entry.
-		return ErrLargeEntry
+		return fmt.Errorf(MsgLargeEntry, len(key), valueSize, maxKeyValLen)
 	}
 
 	// check if the key already exists
