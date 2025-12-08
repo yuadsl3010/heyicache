@@ -260,6 +260,23 @@ type CodeTool struct {
 	needImport      bool
 }
 
+// camelToSnake converts camelCase to snake_case
+// Example: RecommendStore -> recommend_store
+func camelToSnake(s string) string {
+	if len(s) == 0 {
+		return s
+	}
+
+	var result strings.Builder
+	for i, r := range s {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			result.WriteByte('_')
+		}
+		result.WriteRune(r)
+	}
+	return strings.ToLower(result.String())
+}
+
 func NewCodeTool(name, callerPkg, callerPkgName string, isMainPkgStruct bool, objPkg string, subPkgs []string) *CodeTool {
 	// Extract the last part of the package name
 	pkgParts := strings.Split(objPkg, "/") // eg: github.com/yuadsl3010/heyicache/o2oalgo
@@ -268,7 +285,7 @@ func NewCodeTool(name, callerPkg, callerPkgName string, isMainPkgStruct bool, ob
 	// Generate filename: heyicache_fn_{pkgName}_{name}.go
 	filename := fmt.Sprintf("heyicache_fn_%s_%s.go",
 		strings.ToLower(objPkgName),
-		strings.ToLower(name))
+		camelToSnake(name))
 
 	ct := &CodeTool{
 		filename:        filename,
