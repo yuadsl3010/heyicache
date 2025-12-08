@@ -97,6 +97,9 @@ func xxx_genCacheFn(t reflect.Type, callerPkg string, callerPkgName string, isMa
 
 	// func Set()
 	genCacheFnSet(ct, structName, fullStructName, fieldTools)
+
+	// func Copy()
+	genCacheFnCopy(ct, structName, fullStructName, fieldTools)
 }
 
 func getFieldTools(t reflect.Type) []*FieldTool {
@@ -231,6 +234,25 @@ func genCacheFnSet(ct *CodeTool, structName, fullStructName string, fieldTools [
 	ct.SetStructFields(fieldTools)
 
 	ct.Println("return dst, size")
+	ct.Out()
+	ct.Println("}")
+	ct.Println("")
+}
+
+func genCacheFnCopy(ct *CodeTool, structName, fullStructName string, fieldTools []*FieldTool) {
+	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") Copy (src, dst *" + fullStructName + ") {")
+	ct.In()
+	ct.Println("if src == nil || dst == nil {")
+	{
+		ct.In()
+		ct.Println("return")
+		ct.Out()
+	}
+	ct.Println("}")
+
+	// foo.A, foo.B, etc.
+	ct.CopyStructFields(fieldTools)
+
 	ct.Out()
 	ct.Println("}")
 	ct.Println("")
@@ -500,6 +522,96 @@ func (ct *CodeTool) SetSliceString(name string) {
 	ct.Println("}")
 }
 
+func (ct *CodeTool) CopyStruct(name, typeName string) {
+	ct.Println(ct.getFnIfc_(typeName) + ".Copy(&src." + name + ", &dst." + name + ")")
+}
+
+func (ct *CodeTool) CopyStructPtr(name, typeName, fullName string) {
+	ct.Println("if src." + name + " != nil {")
+	ct.In()
+	ct.Println("dst." + name + " = new(" + strings.TrimPrefix(fullName, "*") + ")")
+	ct.Println(ct.getFnIfc_(typeName) + ".Copy(src." + name + ", dst." + name + ")")
+	ct.Out()
+	ct.Println("} else {")
+	ct.In()
+	ct.Println("dst." + name + " = nil")
+	ct.Out()
+	ct.Println("}")
+}
+
+func (ct *CodeTool) CopyString(name string) {
+	ct.Println("dst." + name + " = src." + name)
+}
+
+func (ct *CodeTool) CopySlice(name, typeName string) {
+	ct.Println("if src." + name + " != nil {")
+	ct.In()
+	ct.Println("dst." + name + " = make([]" + typeName + ", len(src." + name + "))")
+	ct.Println("copy(dst." + name + ", src." + name + ")")
+	ct.Out()
+	ct.Println("} else {")
+	ct.In()
+	ct.Println("dst." + name + " = nil")
+	ct.Out()
+	ct.Println("}")
+}
+
+func (ct *CodeTool) CopySliceStruct(name, typeName string) {
+	ct.Println("if src." + name + " != nil {")
+	ct.In()
+	ct.Println("dst." + name + " = make([]" + typeName + ", len(src." + name + "))")
+	ct.Println("for idx := range src." + name + " {")
+	ct.In()
+	ct.Println(ct.getFnIfc_(typeName) + ".Copy(&src." + name + "[idx], &dst." + name + "[idx])")
+	ct.Out()
+	ct.Println("}")
+	ct.Out()
+	ct.Println("} else {")
+	ct.In()
+	ct.Println("dst." + name + " = nil")
+	ct.Out()
+	ct.Println("}")
+}
+
+func (ct *CodeTool) CopySliceStructPtr(name, typeName, fullName string) {
+	ct.Println("if src." + name + " != nil {")
+	ct.In()
+	ct.Println("dst." + name + " = make([]" + fullName + ", len(src." + name + "))")
+	ct.Println("for idx, item := range src." + name + " {")
+	ct.In()
+	ct.Println("if item != nil {")
+	ct.In()
+	ct.Println("dst." + name + "[idx] = new(" + strings.TrimPrefix(fullName, "*") + ")")
+	ct.Println(ct.getFnIfc_(typeName) + ".Copy(item, dst." + name + "[idx])")
+	ct.Out()
+	ct.Println("} else {")
+	ct.In()
+	ct.Println("dst." + name + "[idx] = nil")
+	ct.Out()
+	ct.Println("}")
+	ct.Out()
+	ct.Println("}")
+	ct.Out()
+	ct.Println("} else {")
+	ct.In()
+	ct.Println("dst." + name + " = nil")
+	ct.Out()
+	ct.Println("}")
+}
+
+func (ct *CodeTool) CopySliceString(name string) {
+	ct.Println("if src." + name + " != nil {")
+	ct.In()
+	ct.Println("dst." + name + " = make([]string, len(src." + name + "))")
+	ct.Println("copy(dst." + name + ", src." + name + ")")
+	ct.Out()
+	ct.Println("} else {")
+	ct.In()
+	ct.Println("dst." + name + " = nil")
+	ct.Out()
+	ct.Println("}")
+}
+
 func (ct *CodeTool) SizeSlice(name, typeName string) {
 	ct.Println("size += " + ct.getFuncSizeSlice() + "(src." + name + ", " + ct.getFuncStructSize(typeName) + ")")
 }
@@ -599,6 +711,50 @@ func (ct *CodeTool) SetStructFields(fieldTools []*FieldTool) {
 		case FieldTypeSlice: // foo []int, []byte, etc.
 			ct.Println("// slice: foo []int, []byte, etc.")
 			ct.SetSlice(field.Name, field.TypeName)
+		}
+	}
+	ct.Println("")
+}
+
+func (ct *CodeTool) CopyStructFields(fieldTools []*FieldTool) {
+	for _, field := range fieldTools {
+		ct.Println(field.Check())
+		if field.IsSkip || field.Category == FieldTypeNotStructPtr || field.Category == FieldTypeMap {
+			// skip field
+			ct.Println("// skip field: " + field.Name)
+			prefix := ""
+			if field.IsSkip {
+				// foo *map[string]string
+				// foo map[string]string, map[int]int, etc. (not supported in this tool, but can be used in custom serialization)
+				prefix = "// "
+			}
+
+			ct.Println(prefix + "dst." + field.Name + " = nil")
+			continue
+		}
+
+		switch field.Category {
+		case FieldTypeStruct: // foo Foo
+			ct.Println("// struct: foo Foo")
+			ct.CopyStruct(field.Name, field.TypeName)
+		case FieldTypeStructPtr: // foo *Foo
+			ct.Println("// struct ptr: foo *Foo")
+			ct.CopyStructPtr(field.Name, field.TypeName, field.FullTypeName)
+		case FieldTypeString: // foo string
+			ct.Println("// string: foo string")
+			ct.CopyString(field.Name)
+		case FieldTypeSliceStruct: // foo []Foo
+			ct.Println("// slice struct: foo []Foo")
+			ct.CopySliceStruct(field.Name, field.TypeName)
+		case FieldTypeSliceStructPtr: // foo []*Foo
+			ct.Println("// slice struct ptr: foo []*Foo")
+			ct.CopySliceStructPtr(field.Name, field.TypeName, field.FullTypeName)
+		case FieldTypeSliceString: // foo []string
+			ct.Println("// slice string: foo []string")
+			ct.CopySliceString(field.Name)
+		case FieldTypeSlice: // foo []int, []byte, etc.
+			ct.Println("// slice: foo []int, []byte, etc.")
+			ct.CopySlice(field.Name, field.TypeName)
 		}
 	}
 	ct.Println("")
