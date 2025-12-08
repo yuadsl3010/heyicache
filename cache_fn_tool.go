@@ -163,7 +163,7 @@ func genCacheFnStructSize(ct *CodeTool, structName, fullStructName string) {
 }
 
 func genCacheFnGet(ct *CodeTool, structName, fullStructName string) {
-	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") Get (bs []byte) interface{} {")
+	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") Get(bs []byte) interface{} {")
 	ct.In()
 	ct.Println("if len(bs) == 0 || len(bs) < ifc.StructSize {")
 	{
@@ -181,7 +181,7 @@ func genCacheFnGet(ct *CodeTool, structName, fullStructName string) {
 
 func genCacheFnSize(ct *CodeTool, structName, fullStructName string, fieldTools []*FieldTool) {
 	needObj := false
-	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") Size (value interface{}, isStructPtr bool) int32 {")
+	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") Size(value interface{}, isStructPtr bool) int32 {")
 	ct.In()
 	ct.CheckPtrNil(needObj)
 	ct.CheckPtr(fullStructName, needObj)
@@ -208,7 +208,7 @@ func genCacheFnSize(ct *CodeTool, structName, fullStructName string, fieldTools 
 
 func genCacheFnSet(ct *CodeTool, structName, fullStructName string, fieldTools []*FieldTool) {
 	needObj := true
-	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") Set (value interface{}, bs []byte, isStructPtr bool) (interface{}, int32) {")
+	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") Set(value interface{}, bs []byte, isStructPtr bool) (interface{}, int32) {")
 	ct.In()
 	ct.CheckPtrNil(needObj)
 	ct.CheckPtr(fullStructName, needObj)
