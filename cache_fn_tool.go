@@ -99,26 +99,37 @@ func xxx_genCacheFn(t reflect.Type, callerPkg string, callerPkgName string, isMa
 	genCacheFnSet(ct, structName, fullStructName, fieldTools)
 }
 
+type fieldOptions struct {
+	Skip bool
+}
+
+func parseFieldOptions(field reflect.StructField) fieldOptions {
+	skip := false
+	// opts from tags
+	for _, opt := range strings.Split(field.Tag.Get("heyicache"), ",") {
+		switch opt {
+		case "skip":
+			skip = true
+		}
+	}
+
+	return fieldOptions{
+		Skip: skip,
+	}
+}
+
 func getFieldTools(t reflect.Type) []*FieldTool {
 	fieldTools := make([]*FieldTool, 0, t.NumField())
 	// fields
 	for i := 0; i < t.NumField(); i++ {
-		skip := false
 		field := t.Field(i)
-		// opts from tags
-		for _, opt := range strings.Split(field.Tag.Get("heyicache"), ",") {
-			switch opt {
-			case "skip":
-				skip = true
-			}
-		}
-
+		opts := parseFieldOptions(field)
 		fieldTools = append(fieldTools, &FieldTool{
 			Name:       field.Name,
 			TypeName:   field.Type.Name(),
 			Type:       field.Type,
 			IsExported: field.IsExported(),
-			IsSkip:     skip,
+			IsSkip:     opts.Skip,
 		})
 	}
 	return fieldTools
@@ -805,6 +816,11 @@ func collectSubStructPackages(t reflect.Type, visited map[string]*TypeInfo) []*T
 	}
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
+		opts := parseFieldOptions(field)
+		if opts.Skip {
+			continue
+		}
+
 		fieldType := field.Type
 		switch fieldType.Kind() {
 		case reflect.Struct:
