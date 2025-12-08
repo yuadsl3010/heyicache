@@ -259,16 +259,17 @@ func genCacheFnCopy(ct *CodeTool, structName, fullStructName string, fieldTools 
 }
 
 type CodeTool struct {
-	count           int
-	header          strings.Builder
-	content         strings.Builder
-	filename        string
-	callerPkg       string
-	callerPkgName   string
-	isMainPkgStruct bool
-	objPkg          string
-	subPkgs         []string
-	needImport      bool
+	count             int
+	header            strings.Builder
+	content           strings.Builder
+	filename          string
+	callerPkg         string
+	callerPkgName     string
+	isMainPkgStruct   bool
+	objPkg            string
+	subPkgs           []string
+	needImport        bool
+	needStringsImport bool
 }
 
 func NewCodeTool(name, callerPkg, callerPkgName string, isMainPkgStruct bool, objPkg string, subPkgs []string) *CodeTool {
@@ -297,6 +298,9 @@ func (ct *CodeTool) writeHeader() {
 	ct.header.WriteString(fmt.Sprintf("package %v\n\n", ct.callerPkgName))
 	ct.header.WriteString("import (\n")
 	ct.header.WriteString("\t\"unsafe\"\n")
+	if ct.needStringsImport {
+		ct.header.WriteString("\t\"strings\"\n")
+	}
 	ct.header.WriteString("\n")
 	if ct.needImport {
 		ct.header.WriteString("\t\"" + gitRepo + "/" + gitPkgName + "\"\n")
@@ -540,7 +544,8 @@ func (ct *CodeTool) CopyStructPtr(name, typeName, fullName string) {
 }
 
 func (ct *CodeTool) CopyString(name string) {
-	ct.Println("dst." + name + " = src." + name)
+	ct.needStringsImport = true
+	ct.Println("dst." + name + " = strings.Clone(src." + name + ")")
 }
 
 func (ct *CodeTool) CopySlice(name, typeName string) {
