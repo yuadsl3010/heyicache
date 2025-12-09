@@ -99,26 +99,37 @@ func xxx_genCacheFn(t reflect.Type, callerPkg string, callerPkgName string, isMa
 	genCacheFnSet(ct, structName, fullStructName, fieldTools)
 }
 
+type fieldOptions struct {
+	Skip bool
+}
+
+func parseFieldOptions(field reflect.StructField) fieldOptions {
+	skip := false
+	// opts from tags
+	for _, opt := range strings.Split(field.Tag.Get("heyicache"), ",") {
+		switch opt {
+		case "skip":
+			skip = true
+		}
+	}
+
+	return fieldOptions{
+		Skip: skip,
+	}
+}
+
 func getFieldTools(t reflect.Type) []*FieldTool {
 	fieldTools := make([]*FieldTool, 0, t.NumField())
 	// fields
 	for i := 0; i < t.NumField(); i++ {
-		skip := false
 		field := t.Field(i)
-		// opts from tags
-		for _, opt := range strings.Split(field.Tag.Get("heyicache"), ",") {
-			switch opt {
-			case "skip":
-				skip = true
-			}
-		}
-
+		opts := parseFieldOptions(field)
 		fieldTools = append(fieldTools, &FieldTool{
 			Name:       field.Name,
 			TypeName:   field.Type.Name(),
 			Type:       field.Type,
 			IsExported: field.IsExported(),
-			IsSkip:     skip,
+			IsSkip:     opts.Skip,
 		})
 	}
 	return fieldTools
@@ -249,6 +260,23 @@ type CodeTool struct {
 	needImport      bool
 }
 
+// camelToSnake converts camelCase to snake_case
+// Example: RecommendStore -> recommend_store
+func camelToSnake(s string) string {
+	if len(s) == 0 {
+		return s
+	}
+
+	var result strings.Builder
+	for i, r := range s {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			result.WriteByte('_')
+		}
+		result.WriteRune(r)
+	}
+	return strings.ToLower(result.String())
+}
+
 func NewCodeTool(name, callerPkg, callerPkgName string, isMainPkgStruct bool, objPkg string, subPkgs []string) *CodeTool {
 	// Extract the last part of the package name
 	pkgParts := strings.Split(objPkg, "/") // eg: github.com/yuadsl3010/heyicache/o2oalgo
@@ -257,7 +285,7 @@ func NewCodeTool(name, callerPkg, callerPkgName string, isMainPkgStruct bool, ob
 	// Generate filename: heyicache_fn_{pkgName}_{name}.go
 	filename := fmt.Sprintf("heyicache_fn_%s_%s.go",
 		strings.ToLower(objPkgName),
-		strings.ToLower(name))
+		camelToSnake(name))
 
 	ct := &CodeTool{
 		filename:        filename,
@@ -805,6 +833,11 @@ func collectSubStructPackages(t reflect.Type, visited map[string]*TypeInfo) []*T
 	}
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
+		opts := parseFieldOptions(field)
+		if opts.Skip {
+			continue
+		}
+
 		fieldType := field.Type
 		switch fieldType.Kind() {
 		case reflect.Struct:
