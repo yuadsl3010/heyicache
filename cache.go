@@ -18,6 +18,9 @@ const (
 	minSize                      int64 = 32
 	unitMB                       int64 = 1024 * 1024
 	defaultEvictionTriggerTiming       = 0.5 // 50%
+	copyModeNo                         = 0
+	copyModeShallow                    = 1
+	copyModeDeep                       = 2
 )
 
 // cache instance, refer to freecache but do more performance optimizations based on arena memory
@@ -134,7 +137,7 @@ func (cache *Cache) Set(key []byte, value interface{}, fn HeyiCacheFnIfc, expire
 
 // Actually Get() use lease.Cache instead of cache directly, in some high concurrency scenarios, lease.Cache is old but cache is new when you switch cache instance for storage mode at runtime
 // Drop the Peek() method, it could be replace by Storage mode if you don't want any data expire or eviction
-func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
+func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, copyMode int) (interface{}, error) {
 	if lease == nil || lease.cache == nil {
 		return nil, ErrNilLeaseCtx
 	}
@@ -146,16 +149,45 @@ func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{
 	segment := &lease.cache.segments[segID]
 	value, err := segment.get(key, fn, hashVal)
 	if err == nil {
-		// why segment.curBlock%blockCount instead of just segment.curBlock?
-		// because in storage mode, the segment.curBlock may be greater than blockCount
-		blockID := segment.curBlock % blockCount
-		// later need to return the lease to keep the used = 0
-		segment.bufs[blockID].used += 1
-		atomic.AddInt32(&lease.keeps[segID][blockID], 1) // use atomic to avoid the lease being modified by other goroutines
-	}
-	lease.cache.locks[segID].Unlock()
+		if copyMode != copyModeDeep {
+			// why segment.curBlock%blockCount instead of just segment.curBlock?
+			// because in storage mode, the segment.curBlock may be greater than blockCount
+			blockID := segment.curBlock % blockCount
+			// later need to return the lease to keep the used = 0
+			segment.bufs[blockID].used += 1
+			atomic.AddInt32(&lease.keeps[segID][blockID], 1) // use atomic to avoid the lease being modified by other goroutines
 
+			if copyMode == copyModeShallow {
+				shallow := fn.New()
+				fn.ShallowCopy(value, shallow)
+				value = shallow
+			}
+		} else {
+			// deep copy don't need to keep the lease cause the value is copied
+			deep := fn.New()
+			fn.DeepCopy(value, deep)
+			value = deep
+		}
+	}
+
+	lease.cache.locks[segID].Unlock()
 	return value, err
+}
+
+func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
+	return cache.get(lease, key, fn, copyModeNo)
+}
+
+// GetShallowCopy is a shallow copy of the value, it will not copy the value itself, but copy the pointer to the value
+// so the value is still the same, but the pointer is different
+// this is useful when you want to modify some fields of the value, like int, bool, etc.
+// but be careful, if you want to modify the pointer fields, you need to use GetDeepCopy() instead
+func (cache *Cache) GetShallowCopy(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
+	return cache.get(lease, key, fn, copyModeShallow)
+}
+
+func (cache *Cache) GetDeepCopy(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
+	return cache.get(lease, key, fn, copyModeDeep)
 }
 
 // Del deletes an item in the cache by key and returns true or false if a delete occurred.
