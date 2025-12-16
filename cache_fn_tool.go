@@ -315,10 +315,6 @@ func genCacheFnDeepCopy(ct *CodeTool, structName, fullStructName string, fieldTo
 	ct.Println("}")
 	ct.Println("")
 
-	ct.Println("// Shallow copy first")
-	ct.Println("ifc.ShallowCopy(src, dst)")
-	ct.Println("")
-
 	ct.Println("src, ok := srcValue.(*" + fullStructName + ")")
 	ct.Println("if !ok || src == nil {")
 	{
@@ -337,6 +333,10 @@ func genCacheFnDeepCopy(ct *CodeTool, structName, fullStructName string, fieldTo
 		ct.Out()
 	}
 	ct.Println("}")
+	ct.Println("")
+
+	ct.Println("// Shallow copy first")
+	ct.Println("ifc.ShallowCopy(src, dst)")
 	ct.Println("")
 
 	// foo.A, foo.B, etc.
