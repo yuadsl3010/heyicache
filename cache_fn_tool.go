@@ -98,8 +98,11 @@ func xxx_genCacheFn(t reflect.Type, callerPkg string, callerPkgName string, isMa
 	// func Set()
 	genCacheFnSet(ct, structName, fullStructName, fieldTools)
 
-	// func Copy()
-	genCacheFnCopy(ct, structName, fullStructName, fieldTools)
+	// func ShallowCopy()
+	genCacheFnShallowCopy(ct, structName, fullStructName, fieldTools)
+
+	// func DeepCopy()
+	genCacheFnDeepCopy(ct, structName, fullStructName, fieldTools)
 }
 
 type fieldOptions struct {
@@ -250,8 +253,8 @@ func genCacheFnSet(ct *CodeTool, structName, fullStructName string, fieldTools [
 	ct.Println("")
 }
 
-func genCacheFnCopy(ct *CodeTool, structName, fullStructName string, fieldTools []*FieldTool) {
-	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") Copy (src, dst *" + fullStructName + ") {")
+func genCacheFnShallowCopy(ct *CodeTool, structName, fullStructName string, fieldTools []*FieldTool) {
+	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") ShallowCopy(src, dst *" + fullStructName + ") {")
 	ct.In()
 	ct.Println("if src == nil || dst == nil {")
 	{
@@ -260,9 +263,31 @@ func genCacheFnCopy(ct *CodeTool, structName, fullStructName string, fieldTools 
 		ct.Out()
 	}
 	ct.Println("}")
+	ct.Println("")
+	ct.Println("// Simple struct assignment performs shallow copy")
+	ct.Println("*dst = *src")
+	ct.Out()
+	ct.Println("}")
+	ct.Println("")
+}
+
+func genCacheFnDeepCopy(ct *CodeTool, structName, fullStructName string, fieldTools []*FieldTool) {
+	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") DeepCopy(src, dst *" + fullStructName + ") {")
+	ct.In()
+	ct.Println("if src == nil || dst == nil {")
+	{
+		ct.In()
+		ct.Println("return")
+		ct.Out()
+	}
+	ct.Println("}")
+	ct.Println("")
+	ct.Println("// Shallow copy first")
+	ct.Println("*dst = *src")
+	ct.Println("")
 
 	// foo.A, foo.B, etc.
-	ct.CopyStructFields(fieldTools)
+	ct.DeepCopyStructFields(fieldTools)
 
 	ct.Out()
 	ct.Println("}")
@@ -554,59 +579,47 @@ func (ct *CodeTool) SetSliceString(name string) {
 	ct.Println("}")
 }
 
-func (ct *CodeTool) CopyStruct(name, typeName string) {
-	ct.Println(ct.getFnIfc_(typeName) + ".Copy(&src." + name + ", &dst." + name + ")")
+func (ct *CodeTool) DeepCopyStruct(name, typeName string) {
+	ct.Println(ct.getFnIfc_(typeName) + ".DeepCopy(&src." + name + ", &dst." + name + ")")
 }
 
-func (ct *CodeTool) CopyStructPtr(name, typeName, fullName string) {
+func (ct *CodeTool) DeepCopyStructPtr(name, typeName, fullName string) {
 	ct.Println("if src." + name + " != nil {")
 	ct.In()
 	ct.Println("dst." + name + " = new(" + strings.TrimPrefix(fullName, "*") + ")")
-	ct.Println(ct.getFnIfc_(typeName) + ".Copy(src." + name + ", dst." + name + ")")
-	ct.Out()
-	ct.Println("} else {")
-	ct.In()
-	ct.Println("dst." + name + " = nil")
+	ct.Println(ct.getFnIfc_(typeName) + ".DeepCopy(src." + name + ", dst." + name + ")")
 	ct.Out()
 	ct.Println("}")
 }
 
-func (ct *CodeTool) CopyString(name string) {
+func (ct *CodeTool) DeepCopyString(name string) {
 	ct.needStringsImport = true
 	ct.Println("dst." + name + " = strings.Clone(src." + name + ")")
 }
 
-func (ct *CodeTool) CopySlice(name, typeName string) {
+func (ct *CodeTool) DeepCopySlice(name, typeName string) {
 	ct.Println("if src." + name + " != nil {")
 	ct.In()
 	ct.Println("dst." + name + " = make([]" + typeName + ", len(src." + name + "))")
 	ct.Println("copy(dst." + name + ", src." + name + ")")
 	ct.Out()
-	ct.Println("} else {")
-	ct.In()
-	ct.Println("dst." + name + " = nil")
-	ct.Out()
 	ct.Println("}")
 }
 
-func (ct *CodeTool) CopySliceStruct(name, typeName string) {
+func (ct *CodeTool) DeepCopySliceStruct(name, typeName string) {
 	ct.Println("if src." + name + " != nil {")
 	ct.In()
 	ct.Println("dst." + name + " = make([]" + typeName + ", len(src." + name + "))")
 	ct.Println("for idx := range src." + name + " {")
 	ct.In()
-	ct.Println(ct.getFnIfc_(typeName) + ".Copy(&src." + name + "[idx], &dst." + name + "[idx])")
+	ct.Println(ct.getFnIfc_(typeName) + ".DeepCopy(&src." + name + "[idx], &dst." + name + "[idx])")
 	ct.Out()
 	ct.Println("}")
-	ct.Out()
-	ct.Println("} else {")
-	ct.In()
-	ct.Println("dst." + name + " = nil")
 	ct.Out()
 	ct.Println("}")
 }
 
-func (ct *CodeTool) CopySliceStructPtr(name, typeName, fullName string) {
+func (ct *CodeTool) DeepCopySliceStructPtr(name, typeName, fullName string) {
 	ct.Println("if src." + name + " != nil {")
 	ct.In()
 	ct.Println("dst." + name + " = make([]" + fullName + ", len(src." + name + "))")
@@ -615,32 +628,23 @@ func (ct *CodeTool) CopySliceStructPtr(name, typeName, fullName string) {
 	ct.Println("if item != nil {")
 	ct.In()
 	ct.Println("dst." + name + "[idx] = new(" + strings.TrimPrefix(fullName, "*") + ")")
-	ct.Println(ct.getFnIfc_(typeName) + ".Copy(item, dst." + name + "[idx])")
-	ct.Out()
-	ct.Println("} else {")
-	ct.In()
-	ct.Println("dst." + name + "[idx] = nil")
+	ct.Println(ct.getFnIfc_(typeName) + ".DeepCopy(item, dst." + name + "[idx])")
 	ct.Out()
 	ct.Println("}")
 	ct.Out()
 	ct.Println("}")
-	ct.Out()
-	ct.Println("} else {")
-	ct.In()
-	ct.Println("dst." + name + " = nil")
 	ct.Out()
 	ct.Println("}")
 }
 
-func (ct *CodeTool) CopySliceString(name string) {
-	ct.Println("if src." + name + " != nil {")
+func (ct *CodeTool) DeepCopySliceString(name string) {
+	ct.needStringsImport = true
+	ct.Println(fmt.Sprintf("if src.%s != nil {", name))
 	ct.In()
-	ct.Println("dst." + name + " = make([]string, len(src." + name + "))")
-	ct.Println("copy(dst." + name + ", src." + name + ")")
-	ct.Out()
-	ct.Println("} else {")
+	ct.Println(fmt.Sprintf("dst.%s = make([]string, len(src.%s))", name, name))
+	ct.Println(fmt.Sprintf("for idx, item := range src.%s {", name))
 	ct.In()
-	ct.Println("dst." + name + " = nil")
+	ct.Println(fmt.Sprintf("dst.%s[idx] = strings.Clone(item)", name))
 	ct.Out()
 	ct.Println("}")
 }
@@ -749,7 +753,7 @@ func (ct *CodeTool) SetStructFields(fieldTools []*FieldTool) {
 	ct.Println("")
 }
 
-func (ct *CodeTool) CopyStructFields(fieldTools []*FieldTool) {
+func (ct *CodeTool) DeepCopyStructFields(fieldTools []*FieldTool) {
 	for _, field := range fieldTools {
 		ct.Println(field.Check())
 		if field.IsSkip || field.Category == FieldTypeNotStructPtr || field.Category == FieldTypeMap {
@@ -769,25 +773,25 @@ func (ct *CodeTool) CopyStructFields(fieldTools []*FieldTool) {
 		switch field.Category {
 		case FieldTypeStruct: // foo Foo
 			ct.Println("// struct: foo Foo")
-			ct.CopyStruct(field.Name, field.TypeName)
+			ct.DeepCopyStruct(field.Name, field.TypeName)
 		case FieldTypeStructPtr: // foo *Foo
 			ct.Println("// struct ptr: foo *Foo")
-			ct.CopyStructPtr(field.Name, field.TypeName, field.FullTypeName)
+			ct.DeepCopyStructPtr(field.Name, field.TypeName, field.FullTypeName)
 		case FieldTypeString: // foo string
 			ct.Println("// string: foo string")
-			ct.CopyString(field.Name)
+			ct.DeepCopyString(field.Name)
 		case FieldTypeSliceStruct: // foo []Foo
 			ct.Println("// slice struct: foo []Foo")
-			ct.CopySliceStruct(field.Name, field.TypeName)
+			ct.DeepCopySliceStruct(field.Name, field.TypeName)
 		case FieldTypeSliceStructPtr: // foo []*Foo
 			ct.Println("// slice struct ptr: foo []*Foo")
-			ct.CopySliceStructPtr(field.Name, field.TypeName, field.FullTypeName)
+			ct.DeepCopySliceStructPtr(field.Name, field.TypeName, field.FullTypeName)
 		case FieldTypeSliceString: // foo []string
 			ct.Println("// slice string: foo []string")
-			ct.CopySliceString(field.Name)
+			ct.DeepCopySliceString(field.Name)
 		case FieldTypeSlice: // foo []int, []byte, etc.
 			ct.Println("// slice: foo []int, []byte, etc.")
-			ct.CopySlice(field.Name, field.TypeName)
+			ct.DeepCopySlice(field.Name, field.TypeName)
 		}
 	}
 	ct.Println("")
