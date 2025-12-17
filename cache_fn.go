@@ -9,6 +9,9 @@ type HeyiCacheFnIfc interface {
 	Get([]byte) interface{}
 	Size(interface{}, bool) int32
 	Set(interface{}, []byte, bool) (interface{}, int32)
+	New() interface{}
+	ShallowCopy(interface{}, interface{})
+	DeepCopy(interface{}, interface{})
 }
 
 func HeyiCacheFnSetString(src string, bs []byte) (string, int32) {

@@ -18,6 +18,9 @@ const (
 	minSize                      int64 = 32
 	unitMB                       int64 = 1024 * 1024
 	defaultEvictionTriggerTiming       = 0.5 // 50%
+	modeZeroCopy                       = 0   // zero copy, don't copy the value, just return the pointer
+	modeShallowCopy                    = 1   // shallow copy, copy the value, but the pointer is the same
+	modeDeepCopy                       = 2   // deep copy, copy the value, and the pointer is different
 )
 
 // cache instance, refer to freecache but do more performance optimizations based on arena memory
@@ -134,7 +137,7 @@ func (cache *Cache) Set(key []byte, value interface{}, fn HeyiCacheFnIfc, expire
 
 // Actually Get() use lease.Cache instead of cache directly, in some high concurrency scenarios, lease.Cache is old but cache is new when you switch cache instance for storage mode at runtime
 // Drop the Peek() method, it could be replace by Storage mode if you don't want any data expire or eviction
-func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
+func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, copyMode int) (interface{}, error) {
 	if lease == nil || lease.cache == nil {
 		return nil, ErrNilLeaseCtx
 	}
@@ -146,16 +149,59 @@ func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{
 	segment := &lease.cache.segments[segID]
 	value, err := segment.get(key, fn, hashVal)
 	if err == nil {
-		// why segment.curBlock%blockCount instead of just segment.curBlock?
-		// because in storage mode, the segment.curBlock may be greater than blockCount
-		blockID := segment.curBlock % blockCount
-		// later need to return the lease to keep the used = 0
-		segment.bufs[blockID].used += 1
-		atomic.AddInt32(&lease.keeps[segID][blockID], 1) // use atomic to avoid the lease being modified by other goroutines
-	}
-	lease.cache.locks[segID].Unlock()
+		if copyMode != modeDeepCopy {
+			// why segment.curBlock%blockCount instead of just segment.curBlock?
+			// because in storage mode, the segment.curBlock may be greater than blockCount
+			blockID := segment.curBlock % blockCount
+			// later need to return the lease to keep the used = 0
+			segment.bufs[blockID].used += 1
+			atomic.AddInt32(&lease.keeps[segID][blockID], 1) // use atomic to avoid the lease being modified by other goroutines
 
+			if copyMode == modeShallowCopy {
+				shallow := fn.New()
+				fn.ShallowCopy(value, shallow)
+				value = shallow
+			}
+		} else {
+			// deep copy don't need to keep the lease cause the value is copied
+			deep := fn.New()
+			fn.DeepCopy(value, deep)
+			value = deep
+		}
+	}
+
+	lease.cache.locks[segID].Unlock()
 	return value, err
+}
+
+// the performance is GetZeroCopy >= GetShallowCopy > GetDeepCopy > freecache / bigcache which used proto marshal/unmarshal
+// compare to GetZeroCopy, GetShallowCopy will allocate a new object so it will have faster memory allocation speed
+
+// defualt mode is shallow copy
+// it will return a new object pointer, the inner non-pointer fields will be copied, but the pointer fields will point to the cache []byte memory space directly
+// though you can't modify the pointer fields, you can modify the non-pointer fields
+func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
+	return cache.get(lease, key, fn, modeShallowCopy)
+}
+
+// zero copy mode is more aggressive than shallow copy mode
+// it will return the original pointer to the cache []byte memory space directly
+// if you won't modify any value just for pure reading, and you need extremely performance, you can use this mode
+// PS. actually modify non-pointer fields is fine but not recommended because protobuf marshal will panic, eg:
+// 1. assume the struct just include two uint64 fields, and the values is (0, 2)
+// 2. goroutine-1 start marshal, alloc a new []byte memory space, which len is 8 bytes, because the 0 value will not be marshaled into the []byte memory space
+// 3. goroutine-2 start modify, change value to (1, 2)
+// 4. goroutine-1 continue marshal, use []byte memory marshal the first value 1, it spent 8 bytes, and continue marshal the second value 2, it will panic because there are no enough memory space
+// so you can use shallow copy mode in this case and still have good performance
+func (cache *Cache) GetZeroCopy(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
+	return cache.get(lease, key, fn, modeZeroCopy)
+}
+
+// deep copy mode is the most safe mode but also the most performance-consuming mode
+// it will return a new object pointer, all fields will be copied
+// so you can modify anything as you want
+func (cache *Cache) GetDeepCopy(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
+	return cache.get(lease, key, fn, modeDeepCopy)
 }
 
 // Del deletes an item in the cache by key and returns true or false if a delete occurred.
