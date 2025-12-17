@@ -18,9 +18,9 @@ const (
 	minSize                      int64 = 32
 	unitMB                       int64 = 1024 * 1024
 	defaultEvictionTriggerTiming       = 0.5 // 50%
-	copyModeNo                         = 0
-	copyModeShallow                    = 1
-	copyModeDeep                       = 2
+	modeZeroCopy                       = 0   // zero copy, don't copy the value, just return the pointer
+	modeShallowCopy                    = 1   // shallow copy, copy the value, but the pointer is the same
+	modeDeepCopy                       = 2   // deep copy, copy the value, and the pointer is different
 )
 
 // cache instance, refer to freecache but do more performance optimizations based on arena memory
@@ -149,7 +149,7 @@ func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, copyMode in
 	segment := &lease.cache.segments[segID]
 	value, err := segment.get(key, fn, hashVal)
 	if err == nil {
-		if copyMode != copyModeDeep {
+		if copyMode != modeDeepCopy {
 			// why segment.curBlock%blockCount instead of just segment.curBlock?
 			// because in storage mode, the segment.curBlock may be greater than blockCount
 			blockID := segment.curBlock % blockCount
@@ -157,7 +157,7 @@ func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, copyMode in
 			segment.bufs[blockID].used += 1
 			atomic.AddInt32(&lease.keeps[segID][blockID], 1) // use atomic to avoid the lease being modified by other goroutines
 
-			if copyMode == copyModeShallow {
+			if copyMode == modeShallowCopy {
 				shallow := fn.New()
 				fn.ShallowCopy(value, shallow)
 				value = shallow
@@ -174,20 +174,31 @@ func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, copyMode in
 	return value, err
 }
 
+// the performance is GetZeroCopy >= GetShallowCopy > GetDeepCopy > freecache / bigcache which used proto marshal/unmarshal
+// defualt mode is shallow copy
+// it will return a new object pointer, the inner non-pointer fields will be copied, but the pointer fields will point to the cache []byte memory space
+// though you can't modify the pointer fields, you can modify the non-pointer fields
 func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
-	return cache.get(lease, key, fn, copyModeNo)
+	return cache.get(lease, key, fn, modeShallowCopy)
 }
 
-// GetShallowCopy is a shallow copy of the value, it will not copy the value itself, but copy the pointer to the value
-// so the value is still the same, but the pointer is different
-// this is useful when you want to modify some fields of the value, like int, bool, etc.
-// but be careful, if you want to modify the pointer fields, you need to use GetDeepCopy() instead
-func (cache *Cache) GetShallowCopy(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
-	return cache.get(lease, key, fn, copyModeShallow)
+// zero copy mode is more aggressive than shallow copy mode
+// it will return the original pointer to the cache []byte memory space
+// if you won't modify any value just for pure read, and you need extre performance, you can use this mode
+// PS. actually modify non-pointer fields is fine but not recommended because protobuf marshal will panic, eg:
+// 1. assume the struct just include two uint64 fields, and the values is (0, 2)
+// 2. goroutine-1 start marshal, alloc a new []byte memory space, which len is 8 bytes, because the 0 value will not be marshaled into the []byte memory space
+// 3. goroutine-2 start modify, change value to (1, 2)
+// 4. goroutine-1 continue marshal, use []byte memory marshal the first value 1, it spent 8 bytes, and continue marshal the second value 2, it will panic because there are no enough memory space
+func (cache *Cache) GetZeroCopy(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
+	return cache.get(lease, key, fn, modeZeroCopy)
 }
 
+// deep copy mode is the most safe mode but also the most performance-consuming mode
+// it will return a new object pointer, all fields will be copied
+// so you can modify anything as you want
 func (cache *Cache) GetDeepCopy(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
-	return cache.get(lease, key, fn, copyModeDeep)
+	return cache.get(lease, key, fn, modeDeepCopy)
 }
 
 // Del deletes an item in the cache by key and returns true or false if a delete occurred.
