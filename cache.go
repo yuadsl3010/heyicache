@@ -175,21 +175,24 @@ func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, copyMode in
 }
 
 // the performance is GetZeroCopy >= GetShallowCopy > GetDeepCopy > freecache / bigcache which used proto marshal/unmarshal
+// compare to GetZeroCopy, GetShallowCopy will allocate a new object so it will have faster memory allocation speed
+
 // defualt mode is shallow copy
-// it will return a new object pointer, the inner non-pointer fields will be copied, but the pointer fields will point to the cache []byte memory space
+// it will return a new object pointer, the inner non-pointer fields will be copied, but the pointer fields will point to the cache []byte memory space directly
 // though you can't modify the pointer fields, you can modify the non-pointer fields
 func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
 	return cache.get(lease, key, fn, modeShallowCopy)
 }
 
 // zero copy mode is more aggressive than shallow copy mode
-// it will return the original pointer to the cache []byte memory space
-// if you won't modify any value just for pure read, and you need extre performance, you can use this mode
+// it will return the original pointer to the cache []byte memory space directly
+// if you won't modify any value just for pure reading, and you need extremely performance, you can use this mode
 // PS. actually modify non-pointer fields is fine but not recommended because protobuf marshal will panic, eg:
 // 1. assume the struct just include two uint64 fields, and the values is (0, 2)
 // 2. goroutine-1 start marshal, alloc a new []byte memory space, which len is 8 bytes, because the 0 value will not be marshaled into the []byte memory space
 // 3. goroutine-2 start modify, change value to (1, 2)
 // 4. goroutine-1 continue marshal, use []byte memory marshal the first value 1, it spent 8 bytes, and continue marshal the second value 2, it will panic because there are no enough memory space
+// so you can use shallow copy mode in this case and still have good performance
 func (cache *Cache) GetZeroCopy(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
 	return cache.get(lease, key, fn, modeZeroCopy)
 }
