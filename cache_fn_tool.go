@@ -294,10 +294,7 @@ func genCacheFnShallowCopy(ct *CodeTool, structName, fullStructName string, fiel
 	}
 	ct.Println("}")
 	ct.Println("")
-	ct.Println("// Field-by-field assignment to avoid memory alignment issues")
-	for _, field := range fieldTools {
-		ct.Println("dst." + field.Name + " = src." + field.Name)
-	}
+	ct.Println("*dst = *src")
 	ct.Out()
 	ct.Println("}")
 	ct.Println("")
@@ -335,8 +332,7 @@ func genCacheFnDeepCopy(ct *CodeTool, structName, fullStructName string, fieldTo
 	ct.Println("}")
 	ct.Println("")
 
-	ct.Println("// Shallow copy first")
-	ct.Println("ifc.ShallowCopy(src, dst)")
+	ct.Println("*dst = *src")
 	ct.Println("")
 
 	// foo.A, foo.B, etc.
