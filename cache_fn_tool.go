@@ -276,7 +276,24 @@ func genCacheFnShallowCopy(ct *CodeTool, structName, fullStructName string, fiel
 	}
 	ct.Println("}")
 	ct.Println("")
-
+	ct.Println("src, ok := srcValue.(*" + fullStructName + ")")
+	ct.Println("if !ok || src == nil {")
+	{
+		ct.In()
+		ct.Println("return")
+		ct.Out()
+	}
+	ct.Println("}")
+	ct.Println("")
+	ct.Println("dst, ok := dstValue.(*" + fullStructName + ")")
+	ct.Println("if !ok || dst == nil {")
+	{
+		ct.In()
+		ct.Println("return")
+		ct.Out()
+	}
+	ct.Println("}")
+	ct.Println("")
 	ct.Println("srcBytes := (*[1 << 30]byte)(unsafe.Pointer(src))[:ifc.StructSize:ifc.StructSize]")
 	ct.Println("dstBytes := (*[1 << 30]byte)(unsafe.Pointer(dst))[:ifc.StructSize:ifc.StructSize]")
 	ct.Println("copy(dstBytes, srcBytes)")
