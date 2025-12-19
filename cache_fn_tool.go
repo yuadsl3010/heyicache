@@ -208,9 +208,9 @@ func genCacheFnNew(ct *CodeTool, structName, fullStructName string) {
 }
 
 func genCacheFnPut(ct *CodeTool, structName, fullStructName string) {
-	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") Put(obj *" + fullStructName + ") {")
+	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") Put(value interface{}) {")
 	ct.In()
-	ct.Println("if obj == nil {")
+	ct.Println("if value == nil {")
 	{
 		ct.In()
 		ct.Println("return")
@@ -218,7 +218,15 @@ func genCacheFnPut(ct *CodeTool, structName, fullStructName string) {
 	}
 	ct.Println("}")
 	ct.Println("")
-	ct.Println("*obj = *" + structName + "Empty")
+	ct.Println("obj, ok := value.(*" + fullStructName + ")")
+	ct.Println("if !ok || obj == nil {")
+	{
+		ct.In()
+		ct.Println("return")
+		ct.Out()
+	}
+	ct.Println("}")
+	ct.Println("")
 	ct.Println(structName + "Pool.Put(obj)")
 	ct.Out()
 	ct.Println("}")
