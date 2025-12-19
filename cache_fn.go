@@ -7,6 +7,7 @@ import (
 type HeyiCacheFnIfc interface {
 	// after Get() is called, the lease will be kept until Done() is called
 	Get([]byte) interface{}
+	Put(interface{})
 	Size(interface{}, bool) int32
 	Set(interface{}, []byte, bool) (interface{}, int32)
 	New() interface{}
