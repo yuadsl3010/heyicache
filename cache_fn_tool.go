@@ -92,6 +92,9 @@ func xxx_genCacheFn(t reflect.Type, callerPkg string, callerPkgName string, isMa
 	// func New()
 	genCacheFnNew(ct, structName, fullStructName)
 
+	// func Put()
+	genCacheFnPut(ct, structName, fullStructName)
+
 	// func Get()
 	genCacheFnGet(ct, structName, fullStructName)
 
@@ -167,6 +170,19 @@ func genCacheFnStructSize(ct *CodeTool, structName, fullStructName string) {
 			ct.Out()
 		}
 		ct.Println("}")
+		ct.Println(structName + "Empty = &" + fullStructName + "{}")
+		ct.Println("// object pool")
+		ct.Println(structName + "Pool = sync.Pool{")
+		{
+			ct.In()
+			ct.Println("New: func() interface{} {")
+			ct.In()
+			ct.Println("return &" + fullStructName + "{}")
+			ct.Out()
+			ct.Println("},")
+			ct.Out()
+		}
+		ct.Println("}")
 	}
 	ct.Out()
 	ct.Println(")")
@@ -185,7 +201,33 @@ func genCacheFnStructSize(ct *CodeTool, structName, fullStructName string) {
 func genCacheFnNew(ct *CodeTool, structName, fullStructName string) {
 	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") New() interface{} {")
 	ct.In()
-	ct.Println("return new(" + fullStructName + ")")
+	ct.Println("return " + structName + "Pool.Get().(*" + fullStructName + ")")
+	ct.Out()
+	ct.Println("}")
+	ct.Println("")
+}
+
+func genCacheFnPut(ct *CodeTool, structName, fullStructName string) {
+	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") Put(value interface{}) {")
+	ct.In()
+	ct.Println("if value == nil {")
+	{
+		ct.In()
+		ct.Println("return")
+		ct.Out()
+	}
+	ct.Println("}")
+	ct.Println("")
+	ct.Println("obj, ok := value.(*" + fullStructName + ")")
+	ct.Println("if !ok || obj == nil {")
+	{
+		ct.In()
+		ct.Println("return")
+		ct.Out()
+	}
+	ct.Println("}")
+	ct.Println("")
+	ct.Println(structName + "Pool.Put(obj)")
 	ct.Out()
 	ct.Println("}")
 	ct.Println("")
@@ -294,10 +336,9 @@ func genCacheFnShallowCopy(ct *CodeTool, structName, fullStructName string, fiel
 	}
 	ct.Println("}")
 	ct.Println("")
-	ct.Println("// Field-by-field assignment to avoid memory alignment issues")
-	for _, field := range fieldTools {
-		ct.Println("dst." + field.Name + " = src." + field.Name)
-	}
+	ct.Println("srcBytes := (*[1 << 30]byte)(unsafe.Pointer(src))[:ifc.StructSize:ifc.StructSize]")
+	ct.Println("dstBytes := (*[1 << 30]byte)(unsafe.Pointer(dst))[:ifc.StructSize:ifc.StructSize]")
+	ct.Println("copy(dstBytes, srcBytes)")
 	ct.Out()
 	ct.Println("}")
 	ct.Println("")
@@ -403,6 +444,7 @@ func NewCodeTool(name, callerPkg, callerPkgName string, isMainPkgStruct bool, ob
 func (ct *CodeTool) writeHeader() {
 	ct.header.WriteString(fmt.Sprintf("package %v\n\n", ct.callerPkgName))
 	ct.header.WriteString("import (\n")
+	ct.header.WriteString("\t\"sync\"\n")
 	ct.header.WriteString("\t\"unsafe\"\n")
 	if ct.needStringsImport {
 		ct.header.WriteString("\t\"strings\"\n")
