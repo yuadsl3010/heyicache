@@ -199,9 +199,23 @@ func genCacheFnStructSize(ct *CodeTool, structName, fullStructName string) {
 }
 
 func genCacheFnNew(ct *CodeTool, structName, fullStructName string) {
-	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") New() interface{} {")
+	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") New(usePool bool) interface{} {")
 	ct.In()
-	ct.Println("return " + structName + "Pool.Get().(*" + fullStructName + ")")
+	ct.Println("if usePool {")
+	{
+		ct.In()
+		ct.Println("obj := " + structName + "Pool.Get().(*" + fullStructName + ")")
+		ct.Println("*obj = *" + structName + "Empty")
+		ct.Println("return obj")
+		ct.Out()
+	}
+	ct.Println("} else {")
+	{
+		ct.In()
+		ct.Println("return new(" + fullStructName + ")")
+		ct.Out()
+	}
+	ct.Println("}")
 	ct.Out()
 	ct.Println("}")
 	ct.Println("")
@@ -681,7 +695,7 @@ func (ct *CodeTool) DeepCopyStruct(name, typeName string) {
 func (ct *CodeTool) DeepCopyStructPtr(name, typeName, fullName string) {
 	ct.Println("if src." + name + " != nil {")
 	ct.In()
-	ct.Println("dst." + name + " = " + ct.getFnIfc_(typeName) + ".New().(" + fullName + ")")
+	ct.Println("dst." + name + " = " + ct.getFnIfc_(typeName) + ".New(false).(" + fullName + ")")
 	ct.Println(ct.getFnIfc_(typeName) + ".DeepCopy(src." + name + ", dst." + name + ")")
 	ct.Out()
 	ct.Println("}")
@@ -722,7 +736,7 @@ func (ct *CodeTool) DeepCopySliceStructPtr(name, typeName, fullName string) {
 	ct.In()
 	ct.Println("if item != nil {")
 	ct.In()
-	ct.Println("dst." + name + "[idx] = " + ct.getFnIfc_(typeName) + ".New().(" + fullName + ")")
+	ct.Println("dst." + name + "[idx] = " + ct.getFnIfc_(typeName) + ".New(false).(" + fullName + ")")
 	ct.Println(ct.getFnIfc_(typeName) + ".DeepCopy(item, dst." + name + "[idx])")
 	ct.Out()
 	ct.Println("}")

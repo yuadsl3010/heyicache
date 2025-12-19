@@ -118,8 +118,8 @@ func (leaseCtx *LeaseCtx) Done() {
 				fn.Put(obj)
 			}
 		}
-		lease.mutex.Unlock()
 		lease.objs = nil
+		lease.mutex.Unlock()
 		return true // continue iteration
 	})
 }

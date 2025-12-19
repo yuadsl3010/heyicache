@@ -10,7 +10,7 @@ type HeyiCacheFnIfc interface {
 	Put(interface{})
 	Size(interface{}, bool) int32
 	Set(interface{}, []byte, bool) (interface{}, int32)
-	New() interface{}
+	New(bool) interface{}
 	ShallowCopy(interface{}, interface{})
 	DeepCopy(interface{}, interface{})
 }

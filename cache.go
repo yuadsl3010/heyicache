@@ -158,7 +158,7 @@ func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, copyMode in
 			atomic.AddInt32(&lease.keeps[segID][blockID], 1) // use atomic to avoid the lease being modified by other goroutines
 
 			if copyMode == modeShallowCopy {
-				shallow := fn.New()
+				shallow := fn.New(true)
 				fn.ShallowCopy(value, shallow)
 				value = shallow
 				// for shallow copy, use obj pool to reuse the object
@@ -171,7 +171,7 @@ func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, copyMode in
 			}
 		} else {
 			// deep copy don't need to keep the lease cause the value is copied
-			deep := fn.New()
+			deep := fn.New(false)
 			fn.DeepCopy(value, deep)
 			value = deep
 		}
