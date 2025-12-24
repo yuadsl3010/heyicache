@@ -148,36 +148,39 @@ func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, copyMode in
 	lease.cache.locks[segID].Lock()
 	segment := &lease.cache.segments[segID]
 	value, err := segment.get(key, fn, hashVal)
-	if err == nil {
-		if copyMode != modeDeepCopy {
-			// why segment.curBlock%blockCount instead of just segment.curBlock?
-			// because in storage mode, the segment.curBlock may be greater than blockCount
-			blockID := segment.curBlock % blockCount
-			// later need to return the lease to keep the used = 0
-			segment.bufs[blockID].used += 1
-			atomic.AddInt32(&lease.keeps[segID][blockID], 1) // use atomic to avoid the lease being modified by other goroutines
-
-			if copyMode == modeShallowCopy {
-				shallow := fn.New(true)
-				fn.ShallowCopy(value, shallow)
-				value = shallow
-				// for shallow copy, use obj pool to reuse the object
-				lease.mutex.Lock()
-				if lease.objs == nil {
-					lease.objs = make(map[HeyiCacheFnIfc][]interface{})
-				}
-				lease.objs[fn] = append(lease.objs[fn], shallow)
-				lease.mutex.Unlock()
-			}
-		} else {
-			// deep copy don't need to keep the lease cause the value is copied
-			deep := fn.New(false)
-			fn.DeepCopy(value, deep)
-			value = deep
-		}
+	if err == nil && copyMode != modeDeepCopy {
+		// why segment.curBlock%blockCount instead of just segment.curBlock?
+		// because in storage mode, the segment.curBlock may be greater than blockCount
+		blockID := segment.curBlock % blockCount
+		// later need to return the lease to keep the used = 0
+		segment.bufs[blockID].used += 1
+		atomic.AddInt32(&lease.keeps[segID][blockID], 1) // use atomic to avoid the lease being modified by other goroutines
 	}
 
 	lease.cache.locks[segID].Unlock()
+	switch copyMode {
+	case modeShallowCopy:
+		// shallow copy
+		shallow := fn.New(true)
+		fn.ShallowCopy(value, shallow)
+		value = shallow
+		// for shallow copy, use obj pool to reuse the object
+		lease.mutex.Lock()
+		if lease.objs == nil {
+			lease.objs = make(map[HeyiCacheFnIfc][]interface{})
+		}
+		lease.objs[fn] = append(lease.objs[fn], shallow)
+		lease.mutex.Unlock()
+	case modeDeepCopy:
+		// deep copy
+		// don't need to keep the lease cause the value is copied
+		deep := fn.New(false)
+		fn.DeepCopy(value, deep)
+		value = deep
+	default:
+		// zero copy
+	}
+
 	return value, err
 }
 
