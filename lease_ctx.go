@@ -72,7 +72,7 @@ func (leaseCtx *LeaseCtx) GetLease(cache *Cache) *Lease {
 
 	// 如果 LoadOrStore 返回了已存在的值，需要归还新创建的 keeps
 	if lease != newLease {
-		keepsPool.Put(newLease.keeps)
+		// keepsPool.Put(newLease.keeps)
 	}
 
 	return lease
@@ -106,7 +106,7 @@ func (leaseCtx *LeaseCtx) Done() {
 		// 归还 keeps 到对象池
 		// 快速将 lease.keeps 全部置为 0，采用内存拷贝
 		*lease.keeps = keepsNew
-		keepsPool.Put(lease.keeps)
+		// keepsPool.Put(lease.keeps)
 		lease.keeps = nil
 
 		return true // continue iteration
