@@ -137,7 +137,7 @@ func (cache *Cache) Set(key []byte, value interface{}, fn HeyiCacheFnIfc, expire
 
 // Actually Get() use lease.Cache instead of cache directly, in some high concurrency scenarios, lease.Cache is old but cache is new when you switch cache instance for storage mode at runtime
 // Drop the Peek() method, it could be replace by Storage mode if you don't want any data expire or eviction
-func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, copyMode int) (interface{}, error) {
+func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, copyMode int, useObjPool bool) (interface{}, error) {
 	if lease == nil || lease.cache == nil {
 		return nil, ErrNilLeaseCtx
 	}
@@ -161,16 +161,18 @@ func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, copyMode in
 	switch copyMode {
 	case modeShallowCopy:
 		// shallow copy
-		shallow := fn.New(true)
+		shallow := fn.New(useObjPool)
 		fn.ShallowCopy(value, shallow)
 		value = shallow
-		// for shallow copy, use obj pool to reuse the object
-		lease.mutex.Lock()
-		if lease.objs == nil {
-			lease.objs = make(map[HeyiCacheFnIfc][]interface{})
+		if useObjPool {
+			// for shallow copy, use obj pool to reuse the object
+			lease.mutex.Lock()
+			if lease.objs == nil {
+				lease.objs = make(map[HeyiCacheFnIfc][]interface{})
+			}
+			lease.objs[fn] = append(lease.objs[fn], shallow)
+			lease.mutex.Unlock()
 		}
-		lease.objs[fn] = append(lease.objs[fn], shallow)
-		lease.mutex.Unlock()
 	case modeDeepCopy:
 		// deep copy
 		// don't need to keep the lease cause the value is copied
@@ -191,7 +193,12 @@ func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, copyMode in
 // it will return a new object pointer, the inner non-pointer fields will be copied, but the pointer fields will point to the cache []byte memory space directly
 // though you can't modify the pointer fields, you can modify the non-pointer fields
 func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
-	return cache.get(lease, key, fn, modeShallowCopy)
+	return cache.get(lease, key, fn, modeShallowCopy, false)
+}
+
+// get from obj pool, use obj pool to reuse the object
+func (cache *Cache) GetFromObjPool(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
+	return cache.get(lease, key, fn, modeShallowCopy, true)
 }
 
 // zero copy mode is more aggressive than shallow copy mode
@@ -204,14 +211,14 @@ func (cache *Cache) Get(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{
 // 4. goroutine-1 continue marshal, use []byte memory marshal the first value 1, it spent 8 bytes, and continue marshal the second value 2, it will panic because there are no enough memory space
 // so you can use shallow copy mode in this case and still have good performance
 func (cache *Cache) GetZeroCopy(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
-	return cache.get(lease, key, fn, modeZeroCopy)
+	return cache.get(lease, key, fn, modeZeroCopy, false)
 }
 
 // deep copy mode is the most safe mode but also the most performance-consuming mode
 // it will return a new object pointer, all fields will be copied
 // so you can modify anything as you want
 func (cache *Cache) GetDeepCopy(lease *Lease, key []byte, fn HeyiCacheFnIfc) (interface{}, error) {
-	return cache.get(lease, key, fn, modeDeepCopy)
+	return cache.get(lease, key, fn, modeDeepCopy, false)
 }
 
 // Del deletes an item in the cache by key and returns true or false if a delete occurred.
