@@ -31,8 +31,6 @@ type LeaseCtx struct {
 type Lease struct {
 	keeps *typeLease
 	cache *Cache
-	mutex sync.Mutex
-	objs  map[HeyiCacheFnIfc][]interface{}
 }
 
 func NewLeaseCtx(ctx context.Context) context.Context {
@@ -111,15 +109,6 @@ func (leaseCtx *LeaseCtx) Done() {
 		keepsPool.Put(lease.keeps)
 		lease.keeps = nil
 
-		// 归还 objs 到对象池
-		lease.mutex.Lock()
-		for fn, objs := range lease.objs {
-			for _, obj := range objs {
-				fn.Put(obj)
-			}
-		}
-		lease.objs = nil
-		lease.mutex.Unlock()
 		return true // continue iteration
 	})
 }

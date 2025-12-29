@@ -161,20 +161,13 @@ func (cache *Cache) get(lease *Lease, key []byte, fn HeyiCacheFnIfc, copyMode in
 	switch copyMode {
 	case modeShallowCopy:
 		// shallow copy
-		shallow := fn.New(true)
+		shallow := fn.New()
 		fn.ShallowCopy(value, shallow)
 		value = shallow
-		// for shallow copy, use obj pool to reuse the object
-		lease.mutex.Lock()
-		if lease.objs == nil {
-			lease.objs = make(map[HeyiCacheFnIfc][]interface{})
-		}
-		lease.objs[fn] = append(lease.objs[fn], shallow)
-		lease.mutex.Unlock()
 	case modeDeepCopy:
 		// deep copy
 		// don't need to keep the lease cause the value is copied
-		deep := fn.New(false)
+		deep := fn.New()
 		fn.DeepCopy(value, deep)
 		value = deep
 	default:

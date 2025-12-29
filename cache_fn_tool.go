@@ -92,9 +92,6 @@ func xxx_genCacheFn(t reflect.Type, callerPkg string, callerPkgName string, isMa
 	// func New()
 	genCacheFnNew(ct, structName, fullStructName)
 
-	// func Put()
-	genCacheFnPut(ct, structName, fullStructName)
-
 	// func Get()
 	genCacheFnGet(ct, structName, fullStructName)
 
@@ -171,18 +168,6 @@ func genCacheFnStructSize(ct *CodeTool, structName, fullStructName string) {
 		}
 		ct.Println("}")
 		ct.Println(structName + "Empty = &" + fullStructName + "{}")
-		ct.Println("// object pool")
-		ct.Println(structName + "Pool = sync.Pool{")
-		{
-			ct.In()
-			ct.Println("New: func() interface{} {")
-			ct.In()
-			ct.Println("return &" + fullStructName + "{}")
-			ct.Out()
-			ct.Println("},")
-			ct.Out()
-		}
-		ct.Println("}")
 	}
 	ct.Out()
 	ct.Println(")")
@@ -199,49 +184,9 @@ func genCacheFnStructSize(ct *CodeTool, structName, fullStructName string) {
 }
 
 func genCacheFnNew(ct *CodeTool, structName, fullStructName string) {
-	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") New(usePool bool) interface{} {")
+	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") New() interface{} {")
 	ct.In()
-	ct.Println("if usePool {")
-	{
-		ct.In()
-		ct.Println("obj := " + structName + "Pool.Get().(*" + fullStructName + ")")
-		ct.Println("*obj = *" + structName + "Empty")
-		ct.Println("return obj")
-		ct.Out()
-	}
-	ct.Println("} else {")
-	{
-		ct.In()
-		ct.Println("return new(" + fullStructName + ")")
-		ct.Out()
-	}
-	ct.Println("}")
-	ct.Out()
-	ct.Println("}")
-	ct.Println("")
-}
-
-func genCacheFnPut(ct *CodeTool, structName, fullStructName string) {
-	ct.Println("func (ifc *" + ct.getFnIfc(structName) + ") Put(value interface{}) {")
-	ct.In()
-	ct.Println("if value == nil {")
-	{
-		ct.In()
-		ct.Println("return")
-		ct.Out()
-	}
-	ct.Println("}")
-	ct.Println("")
-	ct.Println("obj, ok := value.(*" + fullStructName + ")")
-	ct.Println("if !ok || obj == nil {")
-	{
-		ct.In()
-		ct.Println("return")
-		ct.Out()
-	}
-	ct.Println("}")
-	ct.Println("")
-	ct.Println(structName + "Pool.Put(obj)")
+	ct.Println("return &" + fullStructName + "{}")
 	ct.Out()
 	ct.Println("}")
 	ct.Println("")
@@ -458,7 +403,6 @@ func NewCodeTool(name, callerPkg, callerPkgName string, isMainPkgStruct bool, ob
 func (ct *CodeTool) writeHeader() {
 	ct.header.WriteString(fmt.Sprintf("package %v\n\n", ct.callerPkgName))
 	ct.header.WriteString("import (\n")
-	ct.header.WriteString("\t\"sync\"\n")
 	ct.header.WriteString("\t\"unsafe\"\n")
 	if ct.needStringsImport {
 		ct.header.WriteString("\t\"strings\"\n")
@@ -695,7 +639,7 @@ func (ct *CodeTool) DeepCopyStruct(name, typeName string) {
 func (ct *CodeTool) DeepCopyStructPtr(name, typeName, fullName string) {
 	ct.Println("if src." + name + " != nil {")
 	ct.In()
-	ct.Println("dst." + name + " = " + ct.getFnIfc_(typeName) + ".New(false).(" + fullName + ")")
+	ct.Println("dst." + name + " = " + ct.getFnIfc_(typeName) + ".New().(" + fullName + ")")
 	ct.Println(ct.getFnIfc_(typeName) + ".DeepCopy(src." + name + ", dst." + name + ")")
 	ct.Out()
 	ct.Println("}")
@@ -736,7 +680,7 @@ func (ct *CodeTool) DeepCopySliceStructPtr(name, typeName, fullName string) {
 	ct.In()
 	ct.Println("if item != nil {")
 	ct.In()
-	ct.Println("dst." + name + "[idx] = " + ct.getFnIfc_(typeName) + ".New(false).(" + fullName + ")")
+	ct.Println("dst." + name + "[idx] = " + ct.getFnIfc_(typeName) + ".New().(" + fullName + ")")
 	ct.Println(ct.getFnIfc_(typeName) + ".DeepCopy(item, dst." + name + "[idx])")
 	ct.Out()
 	ct.Println("}")
