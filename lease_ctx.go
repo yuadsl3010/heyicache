@@ -25,7 +25,8 @@ func newKeepsPool() *sync.Pool {
 }
 
 type LeaseCtx struct {
-	leases sync.Map // map[string]*Lease
+	mu     sync.RWMutex
+	leases map[string]*Lease
 }
 
 type Lease struct {
@@ -36,7 +37,9 @@ type Lease struct {
 }
 
 func NewLeaseCtx(ctx context.Context) context.Context {
-	return context.WithValue(ctx, leaseCtxKey, &LeaseCtx{})
+	return context.WithValue(ctx, leaseCtxKey, &LeaseCtx{
+		leases: make(map[string]*Lease),
+	})
 }
 
 func GetLeaseCtx(ctx context.Context) *LeaseCtx {
@@ -59,25 +62,29 @@ func (leaseCtx *LeaseCtx) GetLease(cache *Cache) *Lease {
 	}
 
 	// 先尝试读取，避免不必要的写操作
-	if value, ok := leaseCtx.leases.Load(cache.leaseName); ok {
-		return value.(*Lease)
+	leaseCtx.mu.RLock()
+	lease, ok := leaseCtx.leases[cache.leaseName]
+	leaseCtx.mu.RUnlock()
+	if ok {
+		return lease
 	}
 
-	// 使用 LoadOrStore 保证原子性，避免重复创建
+	// 使用写锁创建新的 Lease
+	leaseCtx.mu.Lock()
+	defer leaseCtx.mu.Unlock()
+
+	// 双重检查，防止并发创建
+	if lease, ok := leaseCtx.leases[cache.leaseName]; ok {
+		return lease
+	}
+
 	newLease := &Lease{
 		cache: cache,
 		keeps: keepsPool.Get().(*typeLease),
 	}
 
-	actual, _ := leaseCtx.leases.LoadOrStore(cache.leaseName, newLease)
-	lease := actual.(*Lease)
-
-	// 如果 LoadOrStore 返回了已存在的值，需要归还新创建的 keeps
-	if lease != newLease {
-		keepsPool.Put(newLease.keeps)
-	}
-
-	return lease
+	leaseCtx.leases[cache.leaseName] = newLease
+	return newLease
 }
 
 // concurrently unsafe because it should be called only once when the context is done
@@ -86,10 +93,12 @@ func (leaseCtx *LeaseCtx) Done() {
 		return
 	}
 
-	leaseCtx.leases.Range(func(key, value interface{}) bool {
-		lease := value.(*Lease)
+	leaseCtx.mu.RLock()
+	defer leaseCtx.mu.RUnlock()
+
+	for _, lease := range leaseCtx.leases {
 		if lease == nil {
-			return true // continue iteration
+			continue
 		}
 		for segID, vs := range *(lease.keeps) {
 			for block, k := range vs {
@@ -112,14 +121,11 @@ func (leaseCtx *LeaseCtx) Done() {
 		lease.keeps = nil
 
 		// 归还 objs 到对象池
-		lease.mutex.Lock()
 		for fn, objs := range lease.objs {
 			for _, obj := range objs {
 				fn.Put(obj)
 			}
 		}
 		lease.objs = nil
-		lease.mutex.Unlock()
-		return true // continue iteration
-	})
+	}
 }
