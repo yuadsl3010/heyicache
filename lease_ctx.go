@@ -10,7 +10,7 @@ type typeLease [segCount][blockCount]int32
 
 var (
 	ErrNilLeaseCtx = fmt.Errorf("lease context is nil")
-	leaseCtxKey    = "arena_cache_lease"
+	leaseCtxKey    = "heyi_cache_lease"
 	keepsPool      = newKeepsPool()
 	keepsNew       = typeLease{}
 )
