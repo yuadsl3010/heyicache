@@ -93,27 +93,52 @@ func (leaseCtx *LeaseCtx) Done() {
 		return
 	}
 
-	leaseCtx.mu.RLock()
-	defer leaseCtx.mu.RUnlock()
+	leaseCtx.mu.Lock()
+	defer leaseCtx.mu.Unlock()
 
 	for _, lease := range leaseCtx.leases {
 		if lease == nil {
 			continue
 		}
-		for segID, vs := range *(lease.keeps) {
+
+		keeps := lease.keeps
+		if keeps == nil {
+			continue
+		}
+
+		for segID, vs := range *keeps {
+			// 先检查该 segment 是否有需要处理的 block
+			hasWork := false
+			for _, k := range vs {
+				if k > 0 {
+					hasWork = true
+					break
+				}
+			}
+
+			if !hasWork {
+				continue
+			}
+
+			// 对整个 segment 只加锁一次
+			lease.cache.locks[segID].Lock()
+			seg := &lease.cache.segments[segID]
+
+			// 批量处理该 segment 的所有 block
 			for block, k := range vs {
 				if k <= 0 {
 					continue
 				}
-				lease.cache.locks[segID].Lock()
-				seg := &lease.cache.segments[segID]
+
 				seg.bufs[block].used -= k
 				if seg.bufs[block].used == 0 && seg.isInEviction(int32(block)) {
 					seg.eviction()
 				}
-				lease.cache.locks[segID].Unlock()
 			}
+
+			lease.cache.locks[segID].Unlock()
 		}
+
 		// 归还 keeps 到对象池
 		// 快速将 lease.keeps 全部置为 0，采用内存拷贝
 		*lease.keeps = keepsNew
@@ -121,11 +146,15 @@ func (leaseCtx *LeaseCtx) Done() {
 		lease.keeps = nil
 
 		// 归还 objs 到对象池
-		for fn, objs := range lease.objs {
-			for _, obj := range objs {
-				fn.Put(obj)
+		if len(lease.objs) > 0 {
+			lease.mutex.Lock()
+			for fn, objs := range lease.objs {
+				for _, obj := range objs {
+					fn.Put(obj)
+				}
 			}
+			lease.objs = nil
+			lease.mutex.Unlock()
 		}
-		lease.objs = nil
 	}
 }
