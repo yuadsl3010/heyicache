@@ -756,6 +756,8 @@ func (ct *CodeTool) DeepCopySliceString(name string) {
 	ct.Println(fmt.Sprintf("dst.%s[idx] = strings.Clone(item)", name))
 	ct.Out()
 	ct.Println("}")
+	ct.Out()
+	ct.Println("}")
 }
 
 func (ct *CodeTool) SizeSlice(name, typeName string) {
