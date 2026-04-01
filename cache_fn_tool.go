@@ -135,6 +135,9 @@ func getFieldTools(t reflect.Type) []*FieldTool {
 	// fields
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
+		if strings.HasPrefix(field.Name, "XXX_") {
+			continue
+		}
 		opts := parseFieldOptions(field)
 		fieldTools = append(fieldTools, &FieldTool{
 			Name:       field.Name,
