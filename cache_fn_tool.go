@@ -2,11 +2,16 @@ package heyicache
 
 import (
 	"fmt"
+	"go/token"
 	"os"
 	"reflect"
 	"runtime"
 	"strings"
 )
+
+// skill_name: development; plugin_name: development; skill_branch: main;
+// skill_commit: 125eeb496930a08d171acf2dbc7f65f1aa3c4f74;
+// skill_updated_at: 2026-09-30T15:53:35+08:00; skill_version_status: unknown
 
 var (
 	gitRepo         = "github.com/yuadsl3010"
@@ -51,6 +56,10 @@ func genCacheFn(obj interface{}, isMainPkgStruct bool) {
 	}
 
 	typeInfos := collectSubStructPackages(t, make(map[string]*TypeInfo))
+	// Validate the whole graph before emitting any files.
+	for _, info := range typeInfos {
+		validateCacheType(info.T, callerPkg)
+	}
 	fmt.Println("sub struct type infos:")
 	for _, info := range typeInfos {
 		xxx_genCacheFn(info.T, callerPkg, callerPkgName, isMainPkgStruct, info.GetPkgs())
@@ -88,6 +97,7 @@ func xxx_genCacheFn(t reflect.Type, callerPkg string, callerPkgName string, isMa
 	}
 
 	genCacheFnStructSize(ct, structName, fullStructName)
+	genCacheFnProject(ct, structName, fullStructName, fieldTools)
 
 	// func New()
 	genCacheFnNew(ct, structName, fullStructName)
@@ -135,16 +145,13 @@ func getFieldTools(t reflect.Type) []*FieldTool {
 	// fields
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
-		if strings.HasPrefix(field.Name, "XXX_") {
-			continue
-		}
 		opts := parseFieldOptions(field)
 		fieldTools = append(fieldTools, &FieldTool{
 			Name:       field.Name,
 			TypeName:   field.Type.Name(),
 			Type:       field.Type,
 			IsExported: field.IsExported(),
-			IsSkip:     opts.Skip,
+			IsSkip:     opts.Skip || strings.HasPrefix(field.Name, "XXX_"),
 		})
 	}
 	return fieldTools
@@ -199,6 +206,55 @@ func genCacheFnStructSize(ct *CodeTool, structName, fullStructName string) {
 	ct.Out()
 	ct.Println("}")
 	ct.Println("")
+}
+
+// Projection never reads excluded fields. Returning a value also makes the
+// generated assignment safe when source and destination are the same object.
+func genCacheFnProject(ct *CodeTool, structName, fullStructName string, fields []*FieldTool) {
+	ct.Println("func heyicacheProject" + structName + "(src *" + fullStructName + ") " + fullStructName + " {")
+	ct.In()
+	ct.Println("var dst " + fullStructName)
+	ct.ProjectFields(fields)
+	ct.Println("return dst")
+	ct.Out()
+	ct.Println("}")
+	ct.Println("")
+}
+
+func (ct *CodeTool) ProjectFields(fields []*FieldTool) {
+	for _, field := range fields {
+		field.Check()
+		if field.omitted() {
+			continue
+		}
+		switch field.Category {
+		case FieldTypeStruct:
+			ct.Println("dst." + field.Name + " = heyicacheProject" + field.TypeName + "(&src." + field.Name + ")")
+		case FieldTypeArray:
+			ct.ArrayFields(field, ct.ProjectFields)
+		default:
+			ct.Println("dst." + field.Name + " = src." + field.Name)
+		}
+	}
+}
+
+func (ct *CodeTool) ArrayFields(field *FieldTool, generate func([]*FieldTool)) {
+	index := fmt.Sprintf("idx%d", ct.loopID)
+	ct.loopID++
+	ct.Println("for " + index + " := range src." + field.Name + " {")
+	ct.In()
+	generate([]*FieldTool{{Name: field.Name + "[" + index + "]", Type: field.Type.Elem(), IsExported: true}})
+	ct.Out()
+	ct.Println("}")
+}
+
+func arrayNeedsTraversal(t reflect.Type) bool {
+	for t.Kind() == reflect.Array {
+		t = t.Elem()
+	}
+	field := &FieldTool{Type: t, IsExported: true}
+	field.Check()
+	return !field.omitted() && field.Category != FieldTypeUnknown
 }
 
 func genCacheFnNew(ct *CodeTool, structName, fullStructName string) {
@@ -308,12 +364,17 @@ func genCacheFnSet(ct *CodeTool, structName, fullStructName string, fieldTools [
 		ct.In()
 		// foo *Foo
 		ct.Println("size = int32(ifc.StructSize)")
-		ct.Println("srcBytes := (*[1 << 30]byte)(unsafe.Pointer(src))[:size:size]")
-		ct.Println("copy(bs, srcBytes)")
 		ct.Println("dst = (*" + fullStructName + ")(unsafe.Pointer(&bs[0]))")
 		ct.Out()
 	}
 	ct.Println("}")
+	// Arena addresses are not necessarily aligned. Do not emit a typed whole-
+	// struct assignment here: Go's bulk write barrier requires alignment. Copy
+	// only the projected local value, never the original object's private state.
+	ct.Println("public := heyicacheProject" + structName + "(src)")
+	ct.Println("publicBytes := unsafe.Slice((*byte)(unsafe.Pointer(&public)), ifc.StructSize)")
+	ct.Println("arenaBytes := unsafe.Slice((*byte)(unsafe.Pointer(dst)), ifc.StructSize)")
+	ct.Println("copy(arenaBytes, publicBytes)")
 
 	// foo.A, foo.B, etc.
 	ct.SetStructFields(fieldTools)
@@ -353,9 +414,7 @@ func genCacheFnShallowCopy(ct *CodeTool, structName, fullStructName string, fiel
 	}
 	ct.Println("}")
 	ct.Println("")
-	ct.Println("srcBytes := (*[1 << 30]byte)(unsafe.Pointer(src))[:ifc.StructSize:ifc.StructSize]")
-	ct.Println("dstBytes := (*[1 << 30]byte)(unsafe.Pointer(dst))[:ifc.StructSize:ifc.StructSize]")
-	ct.Println("copy(dstBytes, srcBytes)")
+	ct.Println("*dst = heyicacheProject" + structName + "(src)")
 	ct.Out()
 	ct.Println("}")
 	ct.Println("")
@@ -393,8 +452,10 @@ func genCacheFnDeepCopy(ct *CodeTool, structName, fullStructName string, fieldTo
 	ct.Println("}")
 	ct.Println("")
 
-	ct.Println("// Shallow copy first")
-	ct.Println("ifc.ShallowCopy(src, dst)")
+	ct.Println("// Snapshot public fields before overwriting a possibly aliased destination.")
+	ct.Println("source := heyicacheProject" + structName + "(src)")
+	ct.Println("src = &source")
+	ct.Println("*dst = source")
 	ct.Println("")
 
 	// foo.A, foo.B, etc.
@@ -407,6 +468,7 @@ func genCacheFnDeepCopy(ct *CodeTool, structName, fullStructName string, fieldTo
 
 type CodeTool struct {
 	count             int
+	loopID            int
 	header            strings.Builder
 	content           strings.Builder
 	filename          string
@@ -521,6 +583,14 @@ func (ct *CodeTool) getFnIfc(typeName string) string {
 	return prefix + typeName + "Ifc"
 }
 
+func (ct *CodeTool) localType(name string) string {
+	return strings.ReplaceAll(name, ct.callerPkgName+".", "")
+}
+
+func fieldVariable(name string) string {
+	return strings.NewReplacer("[", "_", "]", "", ".", "_").Replace(name)
+}
+
 func (ct *CodeTool) getFnIfc_(typeName string) string {
 	return ct.getFnIfc(typeName) + "_"
 }
@@ -617,22 +687,41 @@ func (ct *CodeTool) CheckSize() {
 }
 
 func (ct *CodeTool) SetSlice(name, typeName string) {
-	ct.Println("p" + name + ", size" + name + " := " + ct.getFuncSetSlice() + "(src." + name + ", bs[size:], " + ct.getFuncStructSize(typeName) + ")")
-	ct.Println("size += size" + name)
+	v := fieldVariable(name)
+	ct.Println("p" + v + ", size" + v + " := " + ct.getFuncSetSlice() + "(src." + name + ", bs[size:], " + ct.getFuncStructSize(typeName) + ")")
+	ct.Println("size += size" + v)
 	ct.CheckSize()
-	ct.Println("dst." + name + " = p" + name)
+	ct.Println("dst." + name + " = p" + v)
 }
 
-func (ct *CodeTool) SetSliceCustom(name, typeName string) {
-	ct.Println("p" + name + ", size" + name + " := " + ct.getFuncSetSlice() + "(src." + name + ", bs[size:], " + ct.getFnIfc_(typeName) + ".StructSize)")
-	ct.Println("size += size" + name)
-	ct.CheckSize()
-	ct.Println("dst." + name + " = p" + name)
+func (ct *CodeTool) SetSliceCustom(name, typeName, fullTypeName string) {
+	// Preserve the source slice before assigning dst: Set(false) works in place.
+	ct.Println("{")
+	ct.In()
+	ct.Println("items := src." + name)
+	ct.Println("dst." + name + " = nil")
+	ct.Println("if len(items) > 0 {")
+	ct.In()
+	ct.Println("dst." + name + " = unsafe.Slice((*" + fullTypeName + ")(unsafe.Pointer(&bs[size])), len(items))")
+	ct.Println("for idx := range items {")
+	ct.In()
+	ct.Println("public := heyicacheProject" + typeName + "(&items[idx])")
+	ct.Println("width := int(unsafe.Sizeof(public))")
+	ct.Println("publicBytes := unsafe.Slice((*byte)(unsafe.Pointer(&public)), width)")
+	ct.Println("copy(bs[int(size)+idx*width:], publicBytes)")
+	ct.Out()
+	ct.Println("}")
+	ct.Println("size += int32(len(items)) * int32(unsafe.Sizeof(items[0]))")
+	ct.Out()
+	ct.Println("}")
+	ct.Out()
+	ct.Println("}")
 }
 
 func (ct *CodeTool) setStruct(name, typeName, item string) {
-	ct.Println("_, size" + name + " := " + ct.getFnIfc_(typeName) + ".Set(" + item + ", bs[size:], false)")
-	ct.Println("size += size" + name)
+	v := fieldVariable(name)
+	ct.Println("_, size" + v + " := " + ct.getFnIfc_(typeName) + ".Set(" + item + ", bs[size:], false)")
+	ct.Println("size += size" + v)
 	ct.CheckSize()
 }
 
@@ -649,12 +738,13 @@ func (ct *CodeTool) SetSliceStruct(name, typeName string) {
 }
 
 func (ct *CodeTool) setStructPtr(name, typeName, fullName, item, idx string) {
-	ct.Println("p" + name + ", size" + name + " := " + ct.getFnIfc_(typeName) + ".Set(" + item + ", bs[size:], true)")
-	ct.Println("size += size" + name)
+	v := fieldVariable(name)
+	ct.Println("p" + v + ", size" + v + " := " + ct.getFnIfc_(typeName) + ".Set(" + item + ", bs[size:], true)")
+	ct.Println("size += size" + v)
 	ct.CheckSize()
-	ct.Println("if p" + name + " != nil && size" + name + " > 0 {")
+	ct.Println("if p" + v + " != nil && size" + v + " > 0 {")
 	ct.In()
-	ct.Println("dst." + name + idx + " = p" + name + ".(" + fullName + ")")
+	ct.Println("dst." + name + idx + " = p" + v + ".(" + ct.localType(fullName) + ")")
 	ct.Out()
 	ct.Println("}")
 	ct.Println("")
@@ -673,10 +763,11 @@ func (ct *CodeTool) SetSliceStructPtr(name, typeName, fullName string) {
 }
 
 func (ct *CodeTool) setString(name, item, idx string) {
-	ct.Println("p" + name + ", size" + name + " := " + ct.getFuncSetString() + "(" + item + ", bs[size:])")
-	ct.Println("size += size" + name)
+	v := fieldVariable(name)
+	ct.Println("p" + v + ", size" + v + " := " + ct.getFuncSetString() + "(" + item + ", bs[size:])")
+	ct.Println("size += size" + v)
 	ct.CheckSize()
-	ct.Println("dst." + name + idx + " = p" + name)
+	ct.Println("dst." + name + idx + " = p" + v)
 }
 
 func (ct *CodeTool) SetString(name string) {
@@ -718,10 +809,10 @@ func (ct *CodeTool) DeepCopySlice(name, typeName string) {
 	ct.Println("}")
 }
 
-func (ct *CodeTool) DeepCopySliceStruct(name, typeName string) {
+func (ct *CodeTool) DeepCopySliceStruct(name, typeName, fullTypeName string) {
 	ct.Println("if src." + name + " != nil {")
 	ct.In()
-	ct.Println("dst." + name + " = make([]" + typeName + ", len(src." + name + "))")
+	ct.Println("dst." + name + " = make([]" + ct.localType(fullTypeName) + ", len(src." + name + "))")
 	ct.Println("for idx := range src." + name + " {")
 	ct.In()
 	ct.Println(ct.getFnIfc_(typeName) + ".DeepCopy(&src." + name + "[idx], &dst." + name + "[idx])")
@@ -823,21 +914,16 @@ func (ct *CodeTool) SizeSliceStructPtr(name, typeName string) {
 func (ct *CodeTool) SetStructFields(fieldTools []*FieldTool) {
 	for _, field := range fieldTools {
 		ct.Println(field.Check())
-		if field.IsSkip || field.Category == FieldTypeNotStructPtr || field.Category == FieldTypeMap {
-			// skip field
-			ct.Println("// skip field: " + field.Name)
-			prefix := ""
-			if field.IsSkip {
-				// foo *map[string]string
-				// foo map[string]string, map[int]int, etc. (not supported in this tool, but can be used in custom serialization)
-				prefix = "// "
-			}
-
-			ct.Println(prefix + "dst." + field.Name + " = nil")
+		if field.omitted() {
+			ct.Println("// omitted field remains zero: " + field.Name)
 			continue
 		}
 
 		switch field.Category {
+		case FieldTypeArray:
+			if arrayNeedsTraversal(field.Type) {
+				ct.ArrayFields(field, ct.SetStructFields)
+			}
 		case FieldTypeStruct: // foo Foo
 			ct.Println("// struct: foo Foo")
 			ct.SetStruct(field.Name, field.TypeName)
@@ -849,7 +935,7 @@ func (ct *CodeTool) SetStructFields(fieldTools []*FieldTool) {
 			ct.SetString(field.Name)
 		case FieldTypeSliceStruct: // foo []Foo
 			ct.Println("// slice struct: foo []Foo")
-			ct.SetSliceCustom(field.Name, field.TypeName)
+			ct.SetSliceCustom(field.Name, field.TypeName, ct.localType(field.FullTypeName))
 			ct.SetSliceStruct(field.Name, field.TypeName)
 		case FieldTypeSliceStructPtr: // foo []*Foo
 			ct.Println("// slice struct ptr: foo []*Foo")
@@ -870,36 +956,31 @@ func (ct *CodeTool) SetStructFields(fieldTools []*FieldTool) {
 func (ct *CodeTool) DeepCopyStructFields(fieldTools []*FieldTool) {
 	for _, field := range fieldTools {
 		ct.Println(field.Check())
-		if field.IsSkip || field.Category == FieldTypeNotStructPtr || field.Category == FieldTypeMap {
-			// skip field
-			ct.Println("// skip field: " + field.Name)
-			prefix := ""
-			if field.IsSkip {
-				// foo *map[string]string
-				// foo map[string]string, map[int]int, etc. (not supported in this tool, but can be used in custom serialization)
-				prefix = "// "
-			}
-
-			ct.Println(prefix + "dst." + field.Name + " = nil")
+		if field.omitted() {
+			ct.Println("// omitted field remains zero: " + field.Name)
 			continue
 		}
 
 		switch field.Category {
+		case FieldTypeArray:
+			if arrayNeedsTraversal(field.Type) {
+				ct.ArrayFields(field, ct.DeepCopyStructFields)
+			}
 		case FieldTypeStruct: // foo Foo
 			ct.Println("// struct: foo Foo")
 			ct.DeepCopyStruct(field.Name, field.TypeName)
 		case FieldTypeStructPtr: // foo *Foo
 			ct.Println("// struct ptr: foo *Foo")
-			ct.DeepCopyStructPtr(field.Name, field.TypeName, field.FullTypeName)
+			ct.DeepCopyStructPtr(field.Name, field.TypeName, ct.localType(field.FullTypeName))
 		case FieldTypeString: // foo string
 			ct.Println("// string: foo string")
 			ct.DeepCopyString(field.Name)
 		case FieldTypeSliceStruct: // foo []Foo
 			ct.Println("// slice struct: foo []Foo")
-			ct.DeepCopySliceStruct(field.Name, field.TypeName)
+			ct.DeepCopySliceStruct(field.Name, field.TypeName, field.FullTypeName)
 		case FieldTypeSliceStructPtr: // foo []*Foo
 			ct.Println("// slice struct ptr: foo []*Foo")
-			ct.DeepCopySliceStructPtr(field.Name, field.TypeName, field.FullTypeName)
+			ct.DeepCopySliceStructPtr(field.Name, field.TypeName, ct.localType(field.FullTypeName))
 		case FieldTypeSliceString: // foo []string
 			ct.Println("// slice string: foo []string")
 			ct.DeepCopySliceString(field.Name)
@@ -914,11 +995,15 @@ func (ct *CodeTool) DeepCopyStructFields(fieldTools []*FieldTool) {
 func (ct *CodeTool) SizeStructFields(fieldTools []*FieldTool) {
 	for _, field := range fieldTools {
 		ct.Println(field.Check())
-		if field.IsSkip || field.Category == FieldTypeNotStructPtr || field.Category == FieldTypeMap {
+		if field.omitted() {
 			ct.Println("// skip field: " + field.Name)
 			continue
 		}
 		switch field.Category {
+		case FieldTypeArray:
+			if arrayNeedsTraversal(field.Type) {
+				ct.ArrayFields(field, ct.SizeStructFields)
+			}
 		case FieldTypeStruct: // foo Foo
 			ct.Println("// struct: foo Foo")
 			ct.SizeStruct(field.Name, field.TypeName)
@@ -960,6 +1045,7 @@ const (
 	FieldTypeSlice          FieldType = 7 // foo []int, []byte, etc.
 	FieldTypeMap            FieldType = 8 // foo map[string]string, map[int]int, etc. (not supported in this tool, but can be used in custom serialization)
 	FieldTypeString         FieldType = 9 // foo string
+	FieldTypeArray          FieldType = 10
 )
 
 //	type TestFoo struct {
@@ -977,14 +1063,27 @@ type FieldTool struct {
 	Category FieldType
 }
 
+func (ft *FieldTool) omitted() bool {
+	return !ft.IsExported || ft.IsSkip || ft.Category == FieldTypeNotStructPtr || ft.Category == FieldTypeMap
+}
+
 func (ft *FieldTool) Check() string {
 	status := "success"
+	if !ft.IsExported || ft.IsSkip {
+		return fmt.Sprintf("// %s: %somitted; kept at its Go zero value", ft.Name, warn)
+	}
 
 	t := ft.Type
 	switch t.Kind() {
-	case reflect.Slice, reflect.Array:
+	case reflect.Array:
+		ft.Category = FieldTypeArray
+	case reflect.Slice:
 		switch t.Elem().Kind() {
 		case reflect.Ptr:
+			if t.Elem().Elem().Kind() != reflect.Struct {
+				ft.Category = FieldTypeNotStructPtr
+				break
+			}
 			name := t.Elem().String() // *heyicache.TestFoo
 			names := strings.Split(name, ".")
 			ft.TypeName = names[len(names)-1] // TestFoo
@@ -994,6 +1093,7 @@ func (ft *FieldTool) Check() string {
 			name := t.Elem().String() // heyicache.TestFoo
 			names := strings.Split(name, ".")
 			ft.TypeName = names[len(names)-1] // TestFoo
+			ft.FullTypeName = getFullTypeName(name)
 			ft.Category = FieldTypeSliceStruct
 		case reflect.String:
 			ft.TypeName = t.Elem().String() // int, uint, float32, etc.
@@ -1020,24 +1120,26 @@ func (ft *FieldTool) Check() string {
 		ft.Category = FieldTypeString
 	case reflect.Map:
 		ft.Category = FieldTypeMap
+	case reflect.Interface, reflect.Func, reflect.Chan, reflect.UnsafePointer:
+		ft.Category = FieldTypeNotStructPtr
 	}
 
 	switch ft.Category {
 	case FieldTypeNotStructPtr:
-		status = fmt.Sprintf("%serror! pointer type must point to struct", warn)
+		status = fmt.Sprintf("%sunsupported reference type; kept at its Go zero value", warn)
 	case FieldTypeMap:
 		status = fmt.Sprintf("%sskip and set nil! map type not supported cause it can't be stored by value, you must use custom serlization to store it if you really want map", warn)
 	}
 
-	if ft.IsSkip {
-		status = fmt.Sprintf("%sskip and set nil! struct tag skip", warn)
-	}
-
-	if !ft.IsExported {
-		status = fmt.Sprintf("%snot exported, it can't be used after get from cache", warn)
-	}
-
 	return fmt.Sprintf("// %v: %v", ft.Name, status)
+}
+
+func validateCacheType(t reflect.Type, callerPkg string) {
+	if t.Name() == "" || (t.PkgPath() != callerPkg && !token.IsExported(t.Name())) {
+		panic(fmt.Sprintf("heyicache: cannot generate a codec for inaccessible or anonymous struct %s", t))
+	}
+	// The existing generator identifies codecs by the named struct type. All
+	// reachable structs have already been collected and are validated separately.
 }
 
 func getPackageFromFuncName(funcName string, isMainPkgStruct bool) (string, string) {
@@ -1100,6 +1202,9 @@ func collectSubStructPackages(t reflect.Type, visited map[string]*TypeInfo) []*T
 	if t.Kind() != reflect.Struct {
 		return typeInfos
 	}
+	if t.Name() == "" {
+		panic(fmt.Sprintf("heyicache: anonymous public struct %s is not supported; use a named type", t))
+	}
 	// Current struct type
 	var currentTypeInfo *TypeInfo
 	if t.PkgPath() != "" {
@@ -1113,11 +1218,14 @@ func collectSubStructPackages(t reflect.Type, visited map[string]*TypeInfo) []*T
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 		opts := parseFieldOptions(field)
-		if opts.Skip {
+		if !field.IsExported() || opts.Skip || strings.HasPrefix(field.Name, "XXX_") {
 			continue
 		}
 
 		fieldType := field.Type
+		for fieldType.Kind() == reflect.Array {
+			fieldType = fieldType.Elem()
+		}
 		switch fieldType.Kind() {
 		case reflect.Struct:
 			subTypeInfos := collectSubStructPackages(fieldType, visited)

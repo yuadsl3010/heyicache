@@ -233,6 +233,36 @@ Value must be a *struct (pointer to a struct).
 
 Map fields within the struct cannot be cached and will be forcibly set to nil.
 
+Generated codecs copy only supported exported fields. Unexported fields,
+fields tagged `heyicache:"skip"`, and fields prefixed with `XXX_` are always
+their Go zero value, even when the codec is generated in the type's own package.
+Numeric/bool/string fields become `0`/`false`/`""`; reference fields become `nil`;
+structs and arrays become their complete zero value. These fields are not read,
+traversed, or included in variable-length storage; the fixed struct size is unchanged.
+Unsupported maps, non-struct pointers, interfaces, functions and channels are also
+omitted. Inspect generated warnings before use.
+
+Arena writes first construct a sanitized, aligned local value, then copy its bytes
+into the arena. They never copy the original object's private fields. This avoids
+whole-struct typed writes to potentially unaligned arena addresses; heap shallow
+and deep copies retain typed assignments and Go's write barriers.
+
+`Set` applies this policy recursively to copied objects. `ShallowCopy` cleans the
+current object and inline structs/arrays, but deliberately shares exported pointers
+and slices; it does not mutate or sanitize their source targets. `DeepCopy` recursively
+cleans the objects it copies. Regenerate all codecs after upgrading; old generated
+code does not acquire this behavior automatically. Existing cache contents are not
+rewritten: recreate the cache when changing codecs.
+
+For protobuf-go-lite, this deliberately discards `unknownFields`, including those
+in nested messages, without changing the protobuf generator or adding wrappers.
+Applications must not rely on forwarding unknown protobuf fields through this cache.
+Types whose meaning depends on private state (for example `time.Time`) need a custom
+codec; successfully generating a codec does not imply semantic compatibility.
+
+Named exported struct types are required for cross-package codecs. Unsupported
+anonymous public structs fail generation before output files are written.
+
 1. Why *struct? Simplifies automatic generation of memory mapping functions (Step 2 in the integration example).
 2. Why no maps? Golang map memory is non-contiguous and highly fragmented, making it impossible to store using a contiguous memory block. Recommended alternatives include using slices/arrays. (Better memory management approaches are welcome for discussion!).
 
@@ -264,6 +294,52 @@ For gRPC services, it's highly recommended to add a middleware that calls heyica
 Failure to return leases prevents HeyiCache from knowing when buffers are safe to recycle, potentially blocking new allocations when the buffer fills
 
 ## Recommendations
+
+### Generator verification
+
+`go test ./...` generates and compiles cross-package codecs in temporary directories,
+then tests zeroing, source isolation, nested arrays/slices, in-place copying, object
+pool reuse and real cache reads. No generated test codecs are checked in.
+
+Install `protoc` and `protoc-gen-go-lite@v0.19.0` on PATH to also run the optional
+lite integration test. It uses an isolated temporary module; protobuf is not a
+runtime dependency of HeyiCache. Missing tools cause an explicit test skip.
+
+```sh
+go test ./... -count=1 -v
+HEYICACHE_GENERATED_TEST_FLAGS='-bench=. -benchmem -benchtime=200ms' go test -run '^TestGeneratedCode$' -count=1 -v
+```
+
+Known limitation: the existing packed arena layout does not guarantee alignment
+after variable-length payloads. `-race`/checkptr can fail with `misaligned pointer
+conversion`; the same problem reproduces in the pre-change `HeyiCacheFnSetSlice`.
+This field-policy change does not fix arena alignment. To isolate race detection
+from that known issue (not to certify memory safety):
+
+```sh
+HEYICACHE_GENERATED_TEST_FLAGS='-race -gcflags=all=-d=checkptr=0' go test -race -gcflags=all=-d=checkptr=0 ./... -count=1
+```
+
+`go vet ./...` also reports the pre-existing unreachable body in `CheckSize`;
+both this diagnostic and the alignment issue reproduce at baseline
+`2fc30e836277508e296859829602f195402e0f23`.
+
+Sample microbenchmark (2026-09-30, Go 1.24.12, darwin/arm64, Apple M1 Pro,
+three 300 ms runs, `internal/testmodel.Record`, not a production meta payload):
+
+| Operation | ns/op range | allocs/op |
+| --- | ---: | ---: |
+| Codec Set, reused arena | 265–313 | 0 |
+| Codec Get, raw view only | 1.63–1.83 | 0 |
+| Public-field shallow copy | 132–142 | 0 |
+| Old raw memory copy | 21–28 | 0 |
+| Deep copy | 507–628 | 22 |
+
+The old raw copy retains private state and is not a valid replacement for the new
+policy. Zero allocations do not imply zero CPU overhead. These numbers exclude
+cache hashing, locking and leases and are not end-to-end service measurements.
+
+<!-- skill_name: development; plugin_name: development; skill_branch: main; skill_commit: 125eeb496930a08d171acf2dbc7f65f1aa3c4f74; skill_updated_at: 2026-09-30T15:53:35+08:00; skill_version_status: unknown -->
 Most use cases can integrate quickly using the provided example.
 
 Highly Recommended: Implement regular monitoring/reporting of HeyiCache metrics (memory usage, evictions, errors). This helps determine if memory needs adjustment or if data access patterns should be optimized.

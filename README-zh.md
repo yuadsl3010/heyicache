@@ -198,6 +198,26 @@ cache和任何一份lease都同时持有 [segment count][block count]int32 的�
 如此巨大的性能提升，but at what cost?
 ### 1. 作为value的struct有类型限制
 value必须是*struct，且struct中的map成员无法被cache且会被强制指向nil
+
+生成器只复制受支持的导出字段。未导出字段、`heyicache:"skip"` 字段、`XXX_` 前缀字段
+统一保持 Go 零值，同包生成也不例外：数值为 `0`，bool 为 `false`，string 为 `""`，
+引用类型为 `nil`，struct/array 为完整零值。不会读取或递归展开这些字段，也不计算其
+变长数据空间；结构体固定尺寸仍保留。不支持的 map、非 struct 指针、interface、func、chan
+同样丢弃，使用前必须检查生成警告。
+
+写入 arena 时先构造已净化且对齐的局部对象，再复制该对象的字节，不复制原对象的私有字段。
+这是为了避免向可能未对齐的 arena 地址执行带 GC 写屏障的整结构体赋值；堆上浅拷贝和深拷贝
+仍使用正常类型赋值和写屏障。
+
+`Set` 递归应用此规则。`ShallowCopy` 清零当前对象及按值内嵌对象的忽略字段，公开指针和
+slice 仍共享原目标，不修改原目标的私有字段；`DeepCopy` 递归净化其复制出的对象。
+升级后必须重新生成全部 codec，并重建缓存；旧生成代码和旧缓存不会自动获得新行为。
+
+protobuf-go-lite 的 `unknownFields`（包括嵌套消息）因此被丢弃，无需修改 protobuf 产物
+或添加兼容层。业务不得依赖缓存透传未知字段。`time.Time` 等依赖私有状态表达含义的类型
+应使用自定义 codec，能生成不等于业务语义完整。
+
+跨包生成需要可访问的命名结构体类型；不支持的公开匿名 struct 会在生成文件前明确报错。
 1. 类型固定为*struct：更方便为其提供内存映射函数的代码（接入例子的第二节，可以为任意struct生成内存映射函数，无需人工干预）
 2. 不支持map成员：golang map所占用的内存并不连续，极其碎片化的分配方式导致无法用一段连续内存进行存储，推荐的实现方式是采用数组进行存储（如果有更好的内存管理方式，也欢迎一起探讨）
 ### 2. value是只读的
@@ -222,6 +242,46 @@ tips: 我自己在业务实践的时候，也会去修改其中的某个静态�
 否则heyicache无法判断buffer是否还在使用，在buffer写满的情况下就无法创建新的空间
 
 ## 使用建议
+
+### 生成器验证
+
+`go test ./...` 在临时目录生成、编译跨包 codec，验证字段零值、源对象隔离、嵌套 array/slice、
+原地复制、对象池复用及真实缓存读取；不提交测试生成产物。
+
+PATH 中有 `protoc` 和 `protoc-gen-go-lite@v0.19.0` 时，还会运行 lite 集成测试。
+依赖只存在于临时测试模块，不给 HeyiCache 增加 protobuf 运行时依赖；工具缺失时明确 skip。
+
+```sh
+go test ./... -count=1 -v
+HEYICACHE_GENERATED_TEST_FLAGS='-bench=. -benchmem -benchtime=200ms' go test -run '^TestGeneratedCode$' -count=1 -v
+```
+
+已知限制：现有紧凑 arena 布局在变长数据后不保证地址对齐，`-race`/checkptr 可能报
+`misaligned pointer conversion`，修改前的 `HeyiCacheFnSetSlice` 也能复现。本次字段策略
+不修复 arena 对齐。仅为隔离该问题检查数据竞争，可执行以下命令；通过不代表内存安全检查通过：
+
+```sh
+HEYICACHE_GENERATED_TEST_FLAGS='-race -gcflags=all=-d=checkptr=0' go test -race -gcflags=all=-d=checkptr=0 ./... -count=1
+```
+
+`go vet ./...` 另有既存 `CheckSize` 不可达代码告警；该告警和上述对齐问题均已在基线
+`2fc30e836277508e296859829602f195402e0f23` 复现。
+
+微基准实测（2026-09-30，Go 1.24.12，darwin/arm64，Apple M1 Pro，3 次 300 ms；
+使用 `internal/testmodel.Record`，不是生产 meta 数据）：
+
+| 操作 | ns/op 范围 | allocs/op |
+| --- | ---: | ---: |
+| Codec Set，复用 arena | 265–313 | 0 |
+| Codec Get，仅原始视图 | 1.63–1.83 | 0 |
+| 公开字段浅拷贝 | 132–142 | 0 |
+| 旧整块内存复制 | 21–28 | 0 |
+| 深拷贝 | 507–628 | 22 |
+
+旧整块复制保留私有状态，不能替代新策略；零分配不等于没有 CPU 开销。上述数据不含缓存
+hash、锁和 lease，不代表服务端到端性能。
+
+<!-- skill_name: development; plugin_name: development; skill_branch: main; skill_commit: 125eeb496930a08d171acf2dbc7f65f1aa3c4f74; skill_updated_at: 2026-09-30T15:53:35+08:00; skill_version_status: unknown -->
 绝大部分场景按照接入例子可以进行快速接入，但建议定时增加heyicache的数据上报，可以帮助你快速分析是否应该增减内存或者调整数据访问方式
 
 有任何疑问或者建议，也欢迎一起交流和讨论: yuadsl3010@gmail.com
