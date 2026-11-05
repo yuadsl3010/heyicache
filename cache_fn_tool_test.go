@@ -16,6 +16,16 @@ import (
 )
 
 func TestGeneratedCode(t *testing.T) {
+	// "model" is a suffix of the fixture package "testmodel". Its external
+	// type qualifiers must survive generation, including pointer/slice types.
+	for _, packageName := range []string{"generatedtest", "model"} {
+		t.Run(packageName, func(t *testing.T) {
+			testGeneratedCode(t, packageName)
+		})
+	}
+}
+
+func testGeneratedCode(t *testing.T, packageName string) {
 	root, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -25,14 +35,14 @@ func TestGeneratedCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.Chdir(root)
-	const module = "github.com/yuadsl3010/heyicache/generatedtest"
+	module := "github.com/yuadsl3010/heyicache/" + packageName
 	infos := collectSubStructPackages(reflect.TypeOf(testmodel.Record{}), make(map[string]*TypeInfo))
 	for _, info := range infos {
 		validateCacheType(info.T, module)
-		xxx_genCacheFn(info.T, module, "generatedtest", false, info.GetPkgs())
+		xxx_genCacheFn(info.T, module, packageName, false, info.GetPkgs())
 	}
 	typ := reflect.TypeOf(testmodel.OnlyPrivate{})
-	xxx_genCacheFn(typ, module, "generatedtest", false, nil)
+	xxx_genCacheFn(typ, module, packageName, false, nil)
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
@@ -54,6 +64,7 @@ func TestGeneratedCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	suite = []byte(strings.Replace(string(suite), "package generatedtest\n", "package "+packageName+"\n", 1))
 	if err := os.WriteFile("generated_test.go", suite, 0600); err != nil {
 		t.Fatal(err)
 	}

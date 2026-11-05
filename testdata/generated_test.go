@@ -50,7 +50,9 @@ func TestCopies(t *testing.T) {
 	}
 	got := value.(*testmodel.Record)
 	check(t, got, true)
-	if src.PrivateZero() || src.Child.PrivateZero() {
+	if src.PrivateZero() || src.Child.PrivateZero() || src.ArrayMaps[0]["x"] != 1 ||
+		src.ArrayScalars[0] == nil || *src.ArrayScalars[0] != 42 || src.ArrayInterfaces[0] == nil ||
+		src.ArrayCallbacks[0] == nil || src.ArrayChannels[0][0] == nil || src.ArrayMapSlices[0][0]["x"] != 1 {
 		t.Fatal("source modified")
 	}
 	// Private payloads must not contribute any bytes to the arena allocation.

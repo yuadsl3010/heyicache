@@ -231,7 +231,9 @@ func (ct *CodeTool) ProjectFields(fields []*FieldTool) {
 		case FieldTypeStruct:
 			ct.Println("dst." + field.Name + " = heyicacheProject" + field.TypeName + "(&src." + field.Name + ")")
 		case FieldTypeArray:
-			ct.ArrayFields(field, ct.ProjectFields)
+			if !arrayElementTool(field.Type).omitted() {
+				ct.ArrayFields(field, ct.ProjectFields)
+			}
 		default:
 			ct.Println("dst." + field.Name + " = src." + field.Name)
 		}
@@ -248,12 +250,19 @@ func (ct *CodeTool) ArrayFields(field *FieldTool, generate func([]*FieldTool)) {
 	ct.Println("}")
 }
 
-func arrayNeedsTraversal(t reflect.Type) bool {
+// Inspect the leaf before emitting loops: an omitted leaf leaves the entire
+// array zero and would otherwise produce an unused loop index.
+func arrayElementTool(t reflect.Type) *FieldTool {
 	for t.Kind() == reflect.Array {
 		t = t.Elem()
 	}
 	field := &FieldTool{Type: t, IsExported: true}
 	field.Check()
+	return field
+}
+
+func arrayNeedsTraversal(t reflect.Type) bool {
+	field := arrayElementTool(t)
 	return !field.omitted() && field.Category != FieldTypeUnknown
 }
 
@@ -584,7 +593,11 @@ func (ct *CodeTool) getFnIfc(typeName string) string {
 }
 
 func (ct *CodeTool) localType(name string) string {
-	return strings.ReplaceAll(name, ct.callerPkgName+".", "")
+	// Only strip an exact qualifier; "model." also occurs inside "testmodel.".
+	if strings.HasPrefix(name, "*") {
+		return "*" + strings.TrimPrefix(name[1:], ct.callerPkgName+".")
+	}
+	return strings.TrimPrefix(name, ct.callerPkgName+".")
 }
 
 func fieldVariable(name string) string {

@@ -28,6 +28,13 @@ type Record struct {
 	Numbers          [2]uint64
 	ArrayPointers    [2]*Child
 	ArraySlices      [2][]byte
+	ArrayMaps        [2]map[string]int
+	ArrayScalars     [2]*int
+	ArrayInterfaces  [2]interface{}
+	ArrayCallbacks   [2]func()
+	ArrayChannels    [2][2]chan int
+	ArrayMapSlices   [2][]map[string]int
+	EmptyPointers    [0]*int
 	SkipInt          int    `heyicache:"skip"`
 	SkipString       string `heyicache:"skip"`
 	SkipSlice        []byte `heyicache:"skip"`
@@ -61,7 +68,11 @@ func New() *Record {
 		Array: [2]Child{c, c}, Matrix: [2][2]Child{{c, c}, {c, c}},
 		Names: [2]string{"one", "two"}, Numbers: [2]uint64{3, 4},
 		ArrayPointers: [2]*Child{&c, nil}, ArraySlices: [2][]byte{[]byte("abc"), nil},
-		SkipInt: 8, SkipString: "skip", SkipSlice: []byte{9}, SkipStruct: c, SkipArray: [2]int{1, 2},
+		ArrayMaps: [2]map[string]int{{"x": 1}, nil}, ArrayScalars: [2]*int{&n, nil},
+		ArrayInterfaces: [2]interface{}{&n, nil}, ArrayCallbacks: [2]func(){func() {}, nil},
+		ArrayChannels:  [2][2]chan int{{make(chan int), nil}, {}},
+		ArrayMapSlices: [2][]map[string]int{{{"x": 1}}, nil},
+		SkipInt:        8, SkipString: "skip", SkipSlice: []byte{9}, SkipStruct: c, SkipArray: [2]int{1, 2},
 		XXX_unrecognized: []byte{1}, Map: map[string]int{"x": 1}, ScalarPointer: &n,
 		Callback: func() {}, Any: &n, Channel: make(chan int),
 		unknownFields: []byte{0xa0, 6, 2}, count: 9, flag: true, text: "private",
@@ -80,7 +91,10 @@ func (r *Record) OmittedZero() bool {
 	return r.PrivateZero() && r.SkipInt == 0 && r.SkipString == "" && r.SkipSlice == nil &&
 		reflect.ValueOf(r.SkipStruct).IsZero() && r.SkipArray == [2]int{} &&
 		r.XXX_unrecognized == nil && r.Map == nil && r.ScalarPointer == nil &&
-		r.Callback == nil && r.Any == nil && r.Channel == nil
+		r.Callback == nil && r.Any == nil && r.Channel == nil &&
+		reflect.ValueOf(r.ArrayMaps).IsZero() && reflect.ValueOf(r.ArrayScalars).IsZero() &&
+		reflect.ValueOf(r.ArrayInterfaces).IsZero() && reflect.ValueOf(r.ArrayCallbacks).IsZero() &&
+		reflect.ValueOf(r.ArrayChannels).IsZero() && reflect.ValueOf(r.ArrayMapSlices).IsZero()
 }
 
 func (c *Child) PrivateZero() bool { return c == nil || c.unknownFields == nil }

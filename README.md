@@ -299,7 +299,10 @@ Failure to return leases prevents HeyiCache from knowing when buffers are safe t
 
 `go test ./...` generates and compiles cross-package codecs in temporary directories,
 then tests zeroing, source isolation, nested arrays/slices, in-place copying, object
-pool reuse and real cache reads. No generated test codecs are checked in.
+pool reuse and real cache reads. Regression cases compile codecs in a package whose
+name is a suffix of the model package, and verify that arrays of unsupported
+elements (including nested and zero-length arrays) remain zero without emitting
+invalid loops. No generated test codecs are checked in.
 
 Install `protoc` and `protoc-gen-go-lite@v0.19.0` on PATH to also run the optional
 lite integration test. It uses an isolated temporary module; protobuf is not a
