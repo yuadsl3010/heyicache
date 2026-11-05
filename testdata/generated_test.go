@@ -7,6 +7,7 @@ package generatedtest
 import (
 	"bytes"
 	"context"
+	"reflect"
 	"runtime"
 	"testing"
 	"unsafe"
@@ -200,3 +201,43 @@ func BenchmarkProjection(b *testing.B) {
 
 // Keep the public cache API in the compilation contract.
 var _ hc.HeyiCacheFnIfc = HeyiCacheFnRecordIfc_
+
+// Heap copies must use an aligned snapshot even when the cached source is packed.
+// Exercise the bulk write barrier while a collector runs concurrently.
+func TestPackedArenaCopiesDuringGC(t *testing.T) {
+	fn := HeyiCacheFnRecordIfc_
+	src := testmodel.New()
+	backing := make([]byte, int(fn.Size(src, true))+1)
+	cached, _ := fn.Set(src, backing[1:], true)
+	shallow, deep := new(testmodel.Record), new(testmodel.Record)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 10; i++ {
+			runtime.GC()
+		}
+	}()
+	for {
+		fn.ShallowCopy(cached, shallow)
+		fn.DeepCopy(cached, deep)
+		check(t, shallow, true)
+		check(t, deep, true)
+		select {
+		case <-done:
+			runtime.KeepAlive(backing)
+			return
+		default:
+		}
+	}
+}
+
+func TestReflectValueCodec(t *testing.T) {
+	src := reflect.ValueOf("private runtime state")
+	fn := HeyiCacheFnValueIfc_
+	buf := make([]byte, fn.Size(&src, true))
+	got, _ := fn.Set(&src, buf, true)
+	if got.(*reflect.Value).IsValid() || !src.IsValid() {
+		t.Fatal("private-only reflect.Value was not cleared or source changed")
+	}
+	runtime.KeepAlive(buf)
+}

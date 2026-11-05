@@ -237,15 +237,24 @@ Generated codecs copy only supported exported fields. Unexported fields,
 fields tagged `heyicache:"skip"`, and fields prefixed with `XXX_` are always
 their Go zero value, even when the codec is generated in the type's own package.
 Numeric/bool/string fields become `0`/`false`/`""`; reference fields become `nil`;
-structs and arrays become their complete zero value. These fields are not read,
-traversed, or included in variable-length storage; the fixed struct size is unchanged.
+structs and arrays become their complete zero value. Their referenced payloads are not traversed or included in variable-length storage;
+the fixed struct size is unchanged.
 Unsupported maps, non-struct pointers, interfaces, functions and channels are also
 omitted. Inspect generated warnings before use.
 
-Arena writes first construct a sanitized, aligned local value, then copy its bytes
-into the arena. They never copy the original object's private fields. This avoids
-whole-struct typed writes to potentially unaligned arena addresses; heap shallow
-and deep copies retain typed assignments and Go's write barriers.
+Arena writes bulk-copy the fixed struct bytes, then zero omitted byte ranges before
+relocating supported payloads. No per-field projection is emitted for types without
+omitted fields. Private field headers may be copied transiently, but are cleared
+before the codec returns; their payloads are never dereferenced. Inputs must not be
+mutated concurrently with copying, including their private state.
+
+Omitted ranges include inline structs and arrays. Their offsets and widths are
+computed once at package initialization using the target architecture's reflected
+layout, not the generator host's layout. There is no reflection during copying.
+Heap shallow/deep copies first bulk-copy into an aligned local value and clear its
+omitted fields, then use a typed destination assignment to retain Go's write
+barriers. Do not replace this with either raw writes into a heap object or a typed
+whole-struct assignment involving an unaligned arena address.
 
 `Set` applies this policy recursively to copied objects. `ShallowCopy` cleans the
 current object and inline structs/arrays, but deliberately shares exported pointers
@@ -338,9 +347,19 @@ three 300 ms runs, `internal/testmodel.Record`, not a production meta payload):
 | Old raw memory copy | 21–28 | 0 |
 | Deep copy | 507–628 | 22 |
 
-The old raw copy retains private state and is not a valid replacement for the new
-policy. Zero allocations do not imply zero CPU overhead. These numbers exclude
+These historical numbers measure the per-field projection implementation before
+the bulk-copy optimization. The old raw copy alone retains private state; the
+optimized implementation adds targeted clearing and keeps heap write barriers. Zero allocations do not imply zero CPU overhead. These numbers exclude
 cache hashing, locking and leases and are not end-to-end service measurements.
+
+
+The bulk-copy implementation was also validated against meta's gogo `Dish`
+(448 bytes, 53 exported fields, Go 1.24.12, darwin/arm64, Apple M1 Pro).
+Five 300 ms runs gave median ShallowCopy times of 68.37 ns for per-field
+projection and 27.87 ns for bulk-copy plus an aligned snapshot; codec Set
+improved from 128.8 ns to 61.89 ns. All were zero allocations. The old raw
+copy measured 8.00 ns and 62.14 ns respectively, but does not preserve heap
+write barriers. These are synthetic codec benchmarks, not service throughput.
 
 <!-- skill_name: development; plugin_name: development; skill_branch: main; skill_commit: 125eeb496930a08d171acf2dbc7f65f1aa3c4f74; skill_updated_at: 2026-09-30T15:53:35+08:00; skill_version_status: unknown -->
 Most use cases can integrate quickly using the provided example.
