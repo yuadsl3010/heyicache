@@ -208,19 +208,49 @@ func genCacheFnStructSize(ct *CodeTool, structName, fullStructName string) {
 	ct.Println("")
 }
 
-// Projection never reads excluded fields. Returning a value also makes the
-// generated assignment safe when source and destination are the same object.
+// Copy into an aligned stack value before assigning to a heap destination.
+// Byte copying accepts packed arena sources; the final typed assignment retains
+// Go's write barriers. Omitted fields are cleared before the value is returned.
 func genCacheFnProject(ct *CodeTool, structName, fullStructName string, fields []*FieldTool) {
+	ct.needsClear = fieldsNeedClear(fields)
+	if ct.needsClear {
+		ct.needReflectImport = true
+		ct.Println("var heyicacheOmitted" + structName + " = func() [][2]uintptr {")
+		ct.In()
+		ct.Println("typ := reflect.TypeOf(" + fullStructName + "{})")
+		ct.Println("var regions [][2]uintptr")
+		ct.omittedFields(fields, "typ", "0")
+		ct.Println("return regions")
+		ct.Out()
+		ct.Println("}()")
+		ct.Println("")
+		ct.Println("func heyicacheClear" + structName + "(bs []byte) {")
+		ct.In()
+		ct.Println("for _, region := range heyicacheOmitted" + structName + " {")
+		ct.In()
+		ct.Println("clear(bs[region[0]:region[1]])")
+		ct.Out()
+		ct.Println("}")
+		ct.Out()
+		ct.Println("}")
+		ct.Println("")
+	}
 	ct.Println("func heyicacheProject" + structName + "(src *" + fullStructName + ") " + fullStructName + " {")
 	ct.In()
 	ct.Println("var dst " + fullStructName)
-	ct.ProjectFields(fields)
+	ct.Println("dstBytes := unsafe.Slice((*byte)(unsafe.Pointer(&dst)), unsafe.Sizeof(dst))")
+	ct.Println("copy(dstBytes, unsafe.Slice((*byte)(unsafe.Pointer(src)), len(dstBytes)))")
+	if ct.needsClear {
+		ct.Println("heyicacheClear" + structName + "(dstBytes)")
+	}
 	ct.Println("return dst")
 	ct.Out()
 	ct.Println("}")
 	ct.Println("")
 }
 
+// ProjectFields retains field-wise emission for custom generator callers.
+// The default generated codecs use bulk copying and targeted clearing instead.
 func (ct *CodeTool) ProjectFields(fields []*FieldTool) {
 	for _, field := range fields {
 		field.Check()
@@ -237,6 +267,71 @@ func (ct *CodeTool) ProjectFields(fields []*FieldTool) {
 		default:
 			ct.Println("dst." + field.Name + " = src." + field.Name)
 		}
+	}
+}
+
+func fieldsNeedClear(fields []*FieldTool) bool {
+	for _, field := range fields {
+		field.Check()
+		if field.Type.Size() != 0 && (field.omitted() || valueNeedsClear(field.Type)) {
+			return true
+		}
+	}
+	return false
+}
+
+func valueNeedsClear(t reflect.Type) bool {
+	if t.Size() == 0 {
+		return false
+	}
+	field := &FieldTool{Type: t, IsExported: true}
+	field.Check()
+	if field.omitted() {
+		return true
+	}
+	switch t.Kind() {
+	case reflect.Struct:
+		return fieldsNeedClear(getFieldTools(t))
+	case reflect.Array:
+		return valueNeedsClear(t.Elem())
+	default:
+		// Pointees and slice elements are sanitized by their own Set/DeepCopy.
+		return false
+	}
+}
+
+// Reflect offsets are evaluated once by the generated package, on its target
+// architecture. Never bake the generator host's struct layout into a codec.
+func (ct *CodeTool) omittedFields(fields []*FieldTool, typ, base string) {
+	for i, field := range fields {
+		field.Check()
+		if field.Type.Size() == 0 || (!field.omitted() && !valueNeedsClear(field.Type)) {
+			continue
+		}
+		f := fmt.Sprintf("%s.Field(%d)", typ, i)
+		offset := "(" + base + " + " + f + ".Offset)"
+		ct.omittedValue(field.Type, f+".Type", offset, field.omitted())
+	}
+}
+
+func (ct *CodeTool) omittedValue(t reflect.Type, typ, base string, omitted bool) {
+	field := &FieldTool{Type: t, IsExported: true}
+	field.Check()
+	if omitted || field.omitted() || (t.Kind() == reflect.Array && arrayElementTool(t).omitted()) {
+		ct.Println("regions = append(regions, [2]uintptr{" + base + ", " + base + " + " + typ + ".Size()})")
+		return
+	}
+	switch t.Kind() {
+	case reflect.Struct:
+		ct.omittedFields(getFieldTools(t), typ, base)
+	case reflect.Array:
+		index := fmt.Sprintf("idx%d", ct.loopID)
+		ct.loopID++
+		ct.Println("for " + index + " := 0; " + index + " < " + typ + ".Len(); " + index + "++ {")
+		ct.In()
+		ct.omittedValue(t.Elem(), typ+".Elem()", "("+base+" + uintptr("+index+") * "+typ+".Elem().Size())", false)
+		ct.Out()
+		ct.Println("}")
 	}
 }
 
@@ -377,13 +472,12 @@ func genCacheFnSet(ct *CodeTool, structName, fullStructName string, fieldTools [
 		ct.Out()
 	}
 	ct.Println("}")
-	// Arena addresses are not necessarily aligned. Do not emit a typed whole-
-	// struct assignment here: Go's bulk write barrier requires alignment. Copy
-	// only the projected local value, never the original object's private state.
-	ct.Println("public := heyicacheProject" + structName + "(src)")
-	ct.Println("publicBytes := unsafe.Slice((*byte)(unsafe.Pointer(&public)), ifc.StructSize)")
+	// Packed arena destinations must not receive whole-struct typed writes.
 	ct.Println("arenaBytes := unsafe.Slice((*byte)(unsafe.Pointer(dst)), ifc.StructSize)")
-	ct.Println("copy(arenaBytes, publicBytes)")
+	ct.Println("copy(arenaBytes, unsafe.Slice((*byte)(unsafe.Pointer(src)), ifc.StructSize))")
+	if ct.needsClear {
+		ct.Println("heyicacheClear" + structName + "(arenaBytes)")
+	}
 
 	// foo.A, foo.B, etc.
 	ct.SetStructFields(fieldTools)
@@ -488,6 +582,8 @@ type CodeTool struct {
 	subPkgs           []string
 	needImport        bool
 	needStringsImport bool
+	needReflectImport bool
+	needsClear        bool
 }
 
 // camelToSnake converts camelCase to snake_case
@@ -543,6 +639,9 @@ func (ct *CodeTool) writeHeader() {
 	}
 	// Use map to remove duplicates
 	uniquePkgs := make(map[string]struct{})
+	if ct.needReflectImport {
+		uniquePkgs["reflect"] = struct{}{}
+	}
 	uniquePkgs[ct.objPkg] = struct{}{}
 	for _, subPkg := range ct.subPkgs {
 		uniquePkgs[subPkg] = struct{}{}
@@ -708,27 +807,12 @@ func (ct *CodeTool) SetSlice(name, typeName string) {
 }
 
 func (ct *CodeTool) SetSliceCustom(name, typeName, fullTypeName string) {
-	// Preserve the source slice before assigning dst: Set(false) works in place.
-	ct.Println("{")
-	ct.In()
-	ct.Println("items := src." + name)
-	ct.Println("dst." + name + " = nil")
-	ct.Println("if len(items) > 0 {")
-	ct.In()
-	ct.Println("dst." + name + " = unsafe.Slice((*" + fullTypeName + ")(unsafe.Pointer(&bs[size])), len(items))")
-	ct.Println("for idx := range items {")
-	ct.In()
-	ct.Println("public := heyicacheProject" + typeName + "(&items[idx])")
-	ct.Println("width := int(unsafe.Sizeof(public))")
-	ct.Println("publicBytes := unsafe.Slice((*byte)(unsafe.Pointer(&public)), width)")
-	ct.Println("copy(bs[int(size)+idx*width:], publicBytes)")
-	ct.Out()
-	ct.Println("}")
-	ct.Println("size += int32(len(items)) * int32(unsafe.Sizeof(items[0]))")
-	ct.Out()
-	ct.Println("}")
-	ct.Out()
-	ct.Println("}")
+	// Copy the fixed records in bulk. SetSliceStruct then sanitizes and
+	// relocates each arena-resident element through Set(false).
+	v := fieldVariable(name)
+	ct.Println("p" + v + ", size" + v + " := " + ct.getFuncSetSlice() + "(src." + name + ", bs[size:], " + ct.getFnIfc_(typeName) + ".StructSize)")
+	ct.Println("size += size" + v)
+	ct.Println("dst." + name + " = p" + v)
 }
 
 func (ct *CodeTool) setStruct(name, typeName, item string) {
