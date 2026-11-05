@@ -1,0 +1,8 @@
+// skill_name: development; plugin_name: development; skill_branch: main;
+// skill_commit: 125eeb496930a08d171acf2dbc7f65f1aa3c4f74;
+// skill_updated_at: 2026-09-30T15:53:35+08:00; skill_version_status: unknown
+syntax = "proto3";
+package model;
+option go_package = "github.com/yuadsl3010/heyicache/litetest/model";
+message Child { string name = 1; }
+message Record { uint64 id = 1; Child child = 2; repeated Child children = 3; }
